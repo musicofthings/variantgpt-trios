@@ -26,6 +26,7 @@ Callbacks posted to callback_url
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -88,7 +89,15 @@ async def run(request: Request) -> JSONResponse:
     # awaiting the job, the request stays open and the machine stays warm. The
     # Worker holds the connection open via executionCtx.waitUntil — it doesn't
     # block the user, who is already polling /status backed by D1.
-    await _execute_job(body)
+    try:
+        await _execute_job(body)
+    except Exception as e:  # noqa: BLE001 — surface to caller + logs
+        print(f"[{body.get('case_id')}] /run crashed: {type(e).__name__}: {e}", flush=True)
+        traceback.print_exc()
+        return JSONResponse(
+            {"ok": False, "case_id": body.get("case_id"), "error": f"{type(e).__name__}: {e}"},
+            status_code=500,
+        )
     return JSONResponse({"ok": True, "case_id": body["case_id"]}, status_code=200)
 
 
@@ -166,26 +175,40 @@ async def _execute_job(job: dict[str, Any]) -> None:
             emit(f"members={len(manifest['pedigree'])} present={present_count} vcfs={len(vcf_map)}")
             await post_status("running")  # surface log/manifest progress
 
-            # 3. Run the engine.
+            # 3. Run the engine. run_case is synchronous and can take a few
+            # seconds; offload to a worker thread so the event loop stays
+            # responsive (callbacks, health checks, SIGTERM handlers).
+            emit("loading PED")
             pedigree = load_ped(ped_path)
-            emission = run_case(
-                case_id=case_id,
-                pedigree=pedigree,
-                vcf_paths=vcf_map,
-                hpo_ids=manifest.get("hpo", []),
-                build="auto",
-                use_demo_annotations=True,
-            )
+            emit("starting engine pipeline")
+            await post_status("running")
+            try:
+                emission = await asyncio.to_thread(
+                    run_case,
+                    case_id=case_id,
+                    pedigree=pedigree,
+                    vcf_paths=vcf_map,
+                    hpo_ids=manifest.get("hpo", []),
+                    build="auto",
+                    use_demo_annotations=True,
+                )
+            except Exception as e:  # noqa: BLE001 — re-emit with context
+                emit(f"engine pipeline failed: {type(e).__name__}: {e}")
+                raise
             emit(f"variants={len(emission.variants)} proposals={len(emission.proposals)}")
+            await post_status("running")
 
             # 4. Upload case.json to R2 via the signed PUT.
+            emit("serializing case.json")
             case_json = emission.model_dump_json(indent=2).encode("utf-8")
+            emit(f"uploading case.json ({len(case_json)} bytes)")
             async with httpx.AsyncClient(timeout=60.0) as client:
                 put = await client.put(
                     case_put_url,
                     content=case_json,
                     headers={"content-type": "application/json"},
                 )
+                emit(f"case.json upload status={put.status_code}")
                 put.raise_for_status()
             emit("uploaded case.json")
 
