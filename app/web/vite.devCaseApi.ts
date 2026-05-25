@@ -121,6 +121,15 @@ export function devCaseApi(): Plugin {
           if (get && req.method === "GET") {
             return await handleGetCase(res, get[1]);
           }
+          // DELETE /api/cases/:caseId
+          const del = url.match(/^\/api\/cases\/([^/?]+)$/);
+          if (del && req.method === "DELETE") {
+            return await handleDeleteCase(res, del[1]);
+          }
+          // POST /api/cases/cleanup
+          if (url.match(/^\/api\/cases\/cleanup\/?$/) && req.method === "POST") {
+            return await handleCleanup(req, res);
+          }
           return notFound(res);
         } catch (e) {
           return error(res, 500, e instanceof Error ? e.message : String(e));
@@ -373,6 +382,54 @@ async function handleGetCase(res: ServerResponse, caseId: string) {
   res.statusCode = 200;
   res.setHeader("content-type", "application/json");
   res.end(body);
+}
+
+/** Dev-only: remove a case's on-disk artifacts (uploads + generated case.json)
+ *  and drop its in-memory job state. Mirrors the Worker's DELETE /api/cases/:id. */
+async function purgeCaseLocal(caseId: string): Promise<number> {
+  const fs = await import("node:fs/promises");
+  let purged = 0;
+  for (const dir of [resolve(UPLOAD_ROOT, caseId), resolve(PUBLIC_CASES, caseId)]) {
+    if (!existsSync(dir)) continue;
+    try {
+      const entries = await fs.readdir(dir);
+      purged += entries.length;
+      await fs.rm(dir, { recursive: true, force: true });
+    } catch { /* ignore best-effort */ }
+  }
+  jobs.delete(caseId);
+  return purged;
+}
+
+async function handleDeleteCase(res: ServerResponse, caseId: string) {
+  const safe = sanitize(caseId);
+  if (!safe) return error(res, 400, "bad caseId");
+  const r2Purged = await purgeCaseLocal(safe);
+  return json(res, 200, { ok: true, r2Purged });
+}
+
+async function handleCleanup(req: IncomingMessage, res: ServerResponse) {
+  let body: { olderThanMinutes?: number } = {};
+  try { body = await readJson<typeof body>(req); } catch { /* tolerate empty */ }
+  const cutoff = Date.now() - (body.olderThanMinutes ?? 30) * 60 * 1000;
+
+  const deleted: string[] = [];
+  let r2Purged = 0;
+
+  // Sweep in-memory + persisted jobs first.
+  let uploadIds: string[] = [];
+  try { uploadIds = (await readdir(UPLOAD_ROOT)).filter((n) => !n.startsWith(".")); } catch {}
+  for (const id of uploadIds) {
+    if (!sanitize(id)) continue;
+    const job = jobs.get(id) ?? (await loadPersistedJob(id));
+    if (!job) continue;
+    const stuck = (job.status === "running" || job.status === "queued") && job.startedAt < cutoff;
+    if (job.status === "error" || stuck) {
+      r2Purged += await purgeCaseLocal(id);
+      deleted.push(id);
+    }
+  }
+  return json(res, 200, { deleted, r2Purged });
 }
 
 // ───────── helpers ─────────

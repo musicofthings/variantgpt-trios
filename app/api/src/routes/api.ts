@@ -420,6 +420,83 @@ apiRouter.get("/cases", async (c) => {
   return c.json({ cases });
 });
 
+/** Delete every R2 object under `cases/<id>/`. Returns the count. */
+async function purgeCaseR2(env: Bindings, id: string): Promise<number> {
+  let purged = 0;
+  let cursor: string | undefined;
+  // R2 list pages at 1000; iterate to be safe even though typical cases
+  // have ≤4 objects (3 uploads + case.json).
+  do {
+    const page = await env.BUCKET.list({ prefix: `cases/${id}/`, cursor, limit: 1000 });
+    if (page.objects.length === 0) break;
+    await Promise.all(page.objects.map((o) => env.BUCKET.delete(o.key).then(() => { purged++; })));
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+  return purged;
+}
+
+/**
+ * DELETE /api/cases/:id
+ * → { ok: true, r2Purged: N }
+ *
+ * Removes everything tied to a case: R2 objects under cases/<id>/ AND the D1
+ * `cases` row (cascades to members, hpo_terms, variants, evidence, jobs,
+ * uploads, ...). Idempotent.
+ */
+apiRouter.delete("/cases/:id", async (c) => {
+  const id = sanitize(c.req.param("id"));
+  if (!id) return c.json({ error: "bad caseId" }, 400);
+
+  const r2Purged = await purgeCaseR2(c.env, id);
+
+  // FK cascade handles every child table. cases row may or may not exist
+  // (legacy upload-only cases lacking a cases row); both are fine.
+  await c.env.DB.prepare(`DELETE FROM cases WHERE id = ?`).bind(id).run();
+  // Belt-and-suspenders in case a job/upload row exists without a cases row.
+  await c.env.DB.prepare(`DELETE FROM jobs WHERE case_id = ?`).bind(id).run();
+  await c.env.DB.prepare(`DELETE FROM uploads WHERE case_id = ?`).bind(id).run();
+
+  return c.json({ ok: true, r2Purged });
+});
+
+/**
+ * POST /api/cases/cleanup
+ * Body: { olderThanMinutes?: number }   (default 30)
+ *
+ * Sweeps stuck/failed runs:
+ *   - Every case where jobs.status = 'error'.
+ *   - Every case where jobs.status = 'running' AND started_at older than
+ *     `olderThanMinutes` ago (likely orphaned — the Fly machine got killed
+ *     mid-job).
+ *
+ * Returns { deleted: [<caseId>...], r2Purged: N }.
+ */
+apiRouter.post("/cases/cleanup", async (c) => {
+  let body: { olderThanMinutes?: number } = {};
+  try { body = await c.req.json(); } catch { /* empty body is fine */ }
+  const olderThanMs = (body.olderThanMinutes ?? 30) * 60 * 1000;
+  const cutoff = Date.now() - olderThanMs;
+
+  const rows = await c.env.DB.prepare(
+    `SELECT case_id FROM jobs
+       WHERE status = 'error'
+          OR (status = 'running' AND COALESCE(started_at, 0) < ?)
+          OR (status = 'queued'  AND COALESCE(started_at, 0) < ?)`,
+  ).bind(cutoff, cutoff).all<{ case_id: string }>();
+
+  const deleted: string[] = [];
+  let r2Purged = 0;
+  for (const row of rows.results ?? []) {
+    const id = row.case_id;
+    r2Purged += await purgeCaseR2(c.env, id);
+    await c.env.DB.prepare(`DELETE FROM cases WHERE id = ?`).bind(id).run();
+    await c.env.DB.prepare(`DELETE FROM jobs WHERE case_id = ?`).bind(id).run();
+    await c.env.DB.prepare(`DELETE FROM uploads WHERE case_id = ?`).bind(id).run();
+    deleted.push(id);
+  }
+  return c.json({ deleted, r2Purged });
+});
+
 // ───────────────────────── crypto helpers ─────────────────────────
 
 async function hmacSha256Hex(secret: string, message: string): Promise<string> {

@@ -20,6 +20,45 @@ export function Dashboard() {
   const [cases, setCases] = useState<CaseListItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [refreshTick, setRefreshTick] = useState(0);
+  const [busy, setBusy] = useState<string | null>(null);   // caseId or "cleanup"
+  const [notice, setNotice] = useState<string | null>(null);
+
+  async function deleteCase(caseId: string, hint: string) {
+    if (!confirm(`Delete ${hint}?\n\nThis removes the R2 uploads, case.json, and all database rows.\nThis cannot be undone.`)) return;
+    setBusy(caseId); setError(null); setNotice(null);
+    try {
+      const r = await fetch(api(`/cases/${caseId}`), { method: "DELETE" });
+      const j: { ok?: boolean; r2Purged?: number; error?: string } = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok) throw new Error(j.error ?? `status ${r.status}`);
+      setNotice(`Deleted ${caseId} (${j.r2Purged ?? 0} R2 objects).`);
+      setRefreshTick((t) => t + 1);
+    } catch (e) {
+      setError(`Delete failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function cleanupOrphaned() {
+    if (!confirm("Sweep failed runs and orphaned runs (running >30 min)?\nThis deletes their R2 uploads and DB rows.")) return;
+    setBusy("cleanup"); setError(null); setNotice(null);
+    try {
+      const r = await fetch(api(`/cases/cleanup`), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ olderThanMinutes: 30 }),
+      });
+      const j: { deleted?: string[]; r2Purged?: number; error?: string } = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error ?? `status ${r.status}`);
+      const n = j.deleted?.length ?? 0;
+      setNotice(n === 0 ? "Nothing to clean up." : `Cleaned ${n} case${n === 1 ? "" : "s"} (${j.r2Purged ?? 0} R2 objects).`);
+      setRefreshTick((t) => t + 1);
+    } catch (e) {
+      setError(`Cleanup failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy(null);
+    }
+  }
 
   // Initial load + auto-refresh while any case is queued/running.
   useEffect(() => {
@@ -51,13 +90,23 @@ export function Dashboard() {
     <>
       <div className="topbar">
         <h1>Cases</h1>
-        <button onClick={() => setRefreshTick((t) => t + 1)} title="Refresh list">↻</button>
+        <button onClick={() => setRefreshTick((t) => t + 1)} title="Refresh list" disabled={!!busy}>↻</button>
+        <button
+          onClick={cleanupOrphaned}
+          disabled={!!busy}
+          title="Delete failed + orphaned runs (running >30 min). Frees R2 storage."
+        >
+          {busy === "cleanup" ? "Cleaning…" : "Clean up failed/orphaned"}
+        </button>
         <Link to="/cases/new"><button className="primary">New case</button></Link>
       </div>
 
       {error ? (
-        <div className="banner banner-warn" style={{ marginBottom: 16 }}>
-          Could not load case list: {error}
+        <div className="banner banner-warn" style={{ marginBottom: 16 }}>{error}</div>
+      ) : null}
+      {notice ? (
+        <div className="banner" style={{ marginBottom: 16, background: "var(--paper-soft, #f6f1e6)", padding: 12, borderRadius: 6 }}>
+          {notice}
         </div>
       ) : null}
 
@@ -86,7 +135,18 @@ export function Dashboard() {
                     <td className="num">{c.memberCount ?? "—"}</td>
                     <td className="num">{c.fileCount ?? "—"}</td>
                     <td>{c.startedAt ? fmtTime(c.startedAt) : "—"}</td>
-                    <td><Link to={`/cases/${c.caseId}`}>View progress →</Link></td>
+                    <td>
+                      <Link to={`/cases/${c.caseId}`}>View progress →</Link>
+                      <button
+                        onClick={() => deleteCase(c.caseId, c.caseId)}
+                        disabled={busy === c.caseId}
+                        title="Delete this run + its uploads"
+                        aria-label={`Delete ${c.caseId}`}
+                        style={{ marginLeft: 8, color: "var(--rust, #b04a2a)" }}
+                      >
+                        {busy === c.caseId ? "…" : "Delete"}
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -108,10 +168,12 @@ export function Dashboard() {
                 <th className="num">Members</th>
                 <th className="num">VCFs</th>
                 <th>Finished</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
-              {/* Demo case is always first if loaded */}
+              {/* Demo case is always first if loaded. Not deletable — it's
+                  bundled with the SPA, not stored in R2/D1. */}
               {demo ? (
                 <tr>
                   <td><Link to={`/cases/${demo.caseRow.id}`}>{demo.caseRow.name}</Link></td>
@@ -119,6 +181,7 @@ export function Dashboard() {
                   <td className="num">3</td>
                   <td className="num">3</td>
                   <td>{demo.caseRow.updated_at}</td>
+                  <td style={{ color: "var(--ink-soft)", fontSize: 11 }}>bundled</td>
                 </tr>
               ) : null}
               {history.map((c) => (
@@ -128,11 +191,22 @@ export function Dashboard() {
                   <td className="num">{c.memberCount ?? "—"}</td>
                   <td className="num">{c.fileCount ?? "—"}</td>
                   <td>{c.finishedAt ? fmtTime(c.finishedAt) : c.hasResult ? "—" : "—"}</td>
+                  <td>
+                    <button
+                      onClick={() => deleteCase(c.caseId, c.caseId)}
+                      disabled={busy === c.caseId}
+                      title="Delete case + uploads"
+                      aria-label={`Delete ${c.caseId}`}
+                      style={{ color: "var(--rust, #b04a2a)" }}
+                    >
+                      {busy === c.caseId ? "…" : "Delete"}
+                    </button>
+                  </td>
                 </tr>
               ))}
               {!demo && history.length === 0 && active.length === 0 ? (
                 <tr>
-                  <td colSpan={5} style={{ textAlign: "center", color: "var(--ink-soft)", padding: 24 }}>
+                  <td colSpan={6} style={{ textAlign: "center", color: "var(--ink-soft)", padding: 24 }}>
                     No cases yet. <Link to="/cases/new">Create one</Link>.
                   </td>
                 </tr>
