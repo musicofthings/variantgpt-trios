@@ -53,7 +53,10 @@ sys.path.insert(0, str(THIS.parents[1] / "engine" / "src"))
 from variantgpt_engine.pedigree import load_ped  # noqa: E402
 from variantgpt_engine.acmg import classify  # noqa: E402
 from variantgpt_engine.annotation import AnnotationContext, annotate  # noqa: E402
+from variantgpt_engine.annotation_sources import vep_rest  # noqa: E402
+from variantgpt_engine.annotation_sources.csq import pick_canonical  # noqa: E402
 from variantgpt_engine.build_detect import detect_build  # noqa: E402
+from variantgpt_engine.filter import filter_candidates  # noqa: E402
 from variantgpt_engine.inheritance import assign_models, compound_het_pass  # noqa: E402
 from variantgpt_engine.joint import merge  # noqa: E402
 from variantgpt_engine.models import Build, CaseEmission, HPOTerm, Variant  # noqa: E402
@@ -61,6 +64,15 @@ from variantgpt_engine.prioritize import priority  # noqa: E402
 from variantgpt_engine.qc import compute_qc  # noqa: E402
 from variantgpt_engine.reclassify import reclassify_all  # noqa: E402
 from run_uploaded_case import _build_ped, _ensure_uncompressed_vcf, _find_member  # noqa: E402
+
+
+# Demo data has 11 variants; clinical exomes have ~250k post-merge; WGS up to 5M.
+# We use this threshold to switch from "demo-data overlay" to "live annotation"
+# mode automatically — no UI flag, just the size of the input determines the path.
+DEMO_MODE_THRESHOLD = 100
+# After the rare-variant + benign-consequence filter, we cap further work at
+# this many candidates. Typical exome filters down to ~3-5k; WGS to ~5-10k.
+MAX_VARIANTS_AFTER_FILTER = 10000
 
 
 def _check_bearer(request: Request) -> JSONResponse | None:
@@ -205,31 +217,60 @@ async def _execute_job(job: dict[str, Any]) -> None:
             emit(f"merged: {len(joint)} joint variants")
             await post_status("running")
 
-            # GUARD: real WGS produces ~50k-500k joint variants. The engine
-            # currently only has the demo-data annotation source wired (11
-            # curated variants); processing a full WGS run would take hours
-            # AND produce a case.json with ~0% annotated variants. Fail fast
-            # with a clear actionable message instead. Lift this once VEP +
-            # tabix tracks are wired (HANDOVER roadmap #2).
-            MAX_VARIANTS_DEMO_MODE = 5000
-            if len(joint) > MAX_VARIANTS_DEMO_MODE:
-                raise RuntimeError(
-                    f"engine is in demo-annotation mode and received {len(joint)} variants "
-                    f"(cap: {MAX_VARIANTS_DEMO_MODE}). For now, upload the curated demo trio "
-                    f"VCFs from data/test/demo_trio/ (~11 variants). Real WGS support requires "
-                    f"VEP + tabix annotation tracks (roadmap item #2)."
-                )
+            # Determine pipeline mode by input size. Small inputs route through
+            # the curated demo-annotation overlay; everything else hits the live
+            # annotation stack (VCF CSQ → VEP REST → gnomAD live).
+            real_mode = len(joint) > DEMO_MODE_THRESHOLD
+            csq_count = sum(1 for jv in joint if jv.csq)
+            emit(f"mode={'real' if real_mode else 'demo'} csq_annotated={csq_count}")
 
             emit("computing QC")
             qc = await asyncio.to_thread(compute_qc, joint, pedigree)
             emit("QC done")
+            await post_status("running")
 
-            track_versions = {"engine": "0.1.0", "demo_dataset": "v1"}
+            if real_mode:
+                # Pre-filter: drop common variants and benign-by-construction
+                # consequences before any expensive annotation.
+                emit("filtering rare + coding")
+                joint_filtered, fstats = await asyncio.to_thread(
+                    filter_candidates, joint, max_af=0.01, drop_filtered=True,
+                )
+                emit(
+                    f"filter: kept={fstats.kept} "
+                    f"dropped_af={fstats.dropped_by_af} "
+                    f"dropped_consequence={fstats.dropped_by_consequence} "
+                    f"dropped_filter_field={fstats.dropped_by_filter_field}"
+                )
+                if len(joint_filtered) > MAX_VARIANTS_AFTER_FILTER:
+                    raise RuntimeError(
+                        f"after rare-variant + consequence filter, {len(joint_filtered)} "
+                        f"variants remain (cap: {MAX_VARIANTS_AFTER_FILTER}). The input "
+                        f"VCF likely doesn't carry AF annotation, so the AF filter couldn't "
+                        f"apply. Either pre-annotate with VEP (so CSQ + AF fields land on "
+                        f"each row) or filter the VCF locally before upload."
+                    )
+                joint = joint_filtered
+                await post_status("running")
+
+                # For survivors without CSQ, fall back to Ensembl VEP REST.
+                missing_csq = [jv for jv in joint if not jv.csq]
+                if missing_csq:
+                    emit(f"VEP REST: annotating {len(missing_csq)} variants")
+                    filled = await asyncio.to_thread(vep_rest.annotate_batch, joint)
+                    emit(f"VEP REST: filled {filled} variants")
+                    await post_status("running")
+
+            track_versions = {"engine": "0.1.0"}
+            if not real_mode:
+                track_versions["demo_dataset"] = "v1"
             ctx = AnnotationContext(
                 build=resolved_build.value,
                 track_versions=track_versions,
-                use_gnomad=False,
-                use_demo_annotations=True,
+                # Live gnomAD on real-mode survivors (already filtered down).
+                use_gnomad=real_mode,
+                gnomad_timeout=5.0,
+                use_demo_annotations=not real_mode,
             )
 
             # Do the entire annotate→classify→priority sweep in a single

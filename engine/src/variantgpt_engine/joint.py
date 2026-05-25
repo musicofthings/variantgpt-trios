@@ -22,6 +22,11 @@ class JointVariant:
     allele_balance: dict[str, Optional[float]] = field(default_factory=dict)
     filters: dict[str, str] = field(default_factory=dict)
 
+    # VEP CSQ — one dict per transcript annotation, keys from the CSQ format
+    # header (Allele, Consequence, IMPACT, SYMBOL, Gene, Feature, HGVSc, HGVSp,
+    # CANONICAL, MANE_SELECT, ...). Empty when the input VCF wasn't VEP-annotated.
+    csq: list[dict[str, str]] = field(default_factory=list)
+
     @property
     def key(self) -> tuple[str, int, str, str]:
         return (self.chrom, self.pos, self.ref, self.alt)
@@ -41,7 +46,23 @@ def merge(member_vcfs: dict[str, Path]) -> list[JointVariant]:
 
     table: dict[tuple[str, int, str, str], JointVariant] = {}
     for member_id, vcf_path in member_vcfs.items():
-        for rec in VCF(str(vcf_path)):
+        vcf = VCF(str(vcf_path))
+        csq_fields: list[str] | None = None
+        for hdr in vcf.header_iter():
+            try:
+                info = hdr.info(extra=True)
+            except Exception:  # noqa: BLE001
+                continue
+            if info.get("ID") == "CSQ" and "Description" in info:
+                csq_fields = _parse_csq_format(f"##INFO=<{info['Description']}>")
+                break
+        for rec in vcf:
+            csq_raw = ""
+            try:
+                csq_raw = rec.INFO.get("CSQ") or ""
+            except KeyError:
+                pass
+            csq_per_alt = _parse_csq(csq_raw, csq_fields) if csq_fields and csq_raw else {}
             for alt in rec.ALT:
                 key = (str(rec.CHROM), int(rec.POS), str(rec.REF), str(alt))
                 jv = table.setdefault(
@@ -54,51 +75,151 @@ def merge(member_vcfs: dict[str, Path]) -> list[JointVariant]:
                     jv.depths[member_id] = int(rec.gt_depths[0])
                 if rec.FILTER:
                     jv.filters[member_id] = str(rec.FILTER)
+                if csq_per_alt and not jv.csq:
+                    matches = csq_per_alt.get(str(alt), []) or csq_per_alt.get(_csq_allele(str(rec.REF), str(alt)), [])
+                    if matches:
+                        jv.csq = matches
     return list(table.values())
 
 
 def _merge_pure_python(member_vcfs: dict[str, Path]) -> list[JointVariant]:
     """Minimal VCF v4.2 reader — uncompressed, biallelic, single-sample.
 
-    Sufficient for the curated demo trio (data/test/demo_trio). Real cases must
-    route through cyvcf2 + bcftools norm; this is explicitly a demo-only path.
+    Captures: genotypes, depths, FILTER, and the VEP CSQ INFO field if the VCF
+    was VEP-annotated. CSQ is parsed using the format declared in the
+    ``##INFO=<ID=CSQ,...,Format=...>`` header line, so any pipe-delimited field
+    layout works.
+
+    Sufficient for the curated demo trio AND for VEP-annotated clinical VCFs.
+    Multi-allelic sites are split on commas before keying.
     """
     table: dict[tuple[str, int, str, str], JointVariant] = {}
     for member_id, vcf_path in member_vcfs.items():
         with open(vcf_path, "r", encoding="utf-8") as fh:
-            format_idx: dict[str, int] = {}
+            csq_fields: list[str] | None = None
             for raw in fh:
                 line = raw.rstrip("\n")
-                if not line or line.startswith("##"):
+                if not line:
+                    continue
+                if line.startswith("##"):
+                    # Capture CSQ format declaration (once).
+                    if csq_fields is None and line.startswith("##INFO=<ID=CSQ"):
+                        csq_fields = _parse_csq_format(line)
                     continue
                 if line.startswith("#CHROM"):
                     continue
                 cols = line.split("\t")
                 if len(cols) < 10:
                     continue
-                chrom, pos, _id, ref, alt, _qual, filt, _info, fmt, sample = cols[:10]
-                # The synthetic demo emits one ALT per row; skip multiallelic safety.
-                if "," in alt:
-                    continue
-                key = (chrom, int(pos), ref, alt)
-                jv = table.setdefault(
-                    key,
-                    JointVariant(chrom=chrom, pos=int(pos), ref=ref, alt=alt),
-                )
-                # Parse FORMAT / SAMPLE.
+                chrom, pos, _id, ref, alt, _qual, filt, info, fmt, sample = cols[:10]
                 fmt_keys = fmt.split(":")
                 fmt_vals = sample.split(":")
                 format_idx = {k: i for i, k in enumerate(fmt_keys)}
                 gt_str = fmt_vals[format_idx.get("GT", 0)] if fmt_vals else "./."
-                jv.genotypes[member_id] = _parse_gt(gt_str)
-                if "DP" in format_idx and format_idx["DP"] < len(fmt_vals):
-                    try:
-                        jv.depths[member_id] = int(fmt_vals[format_idx["DP"]])
-                    except ValueError:
-                        pass
-                if filt and filt != "PASS":
-                    jv.filters[member_id] = filt
+                gt = _parse_gt(gt_str)
+                try:
+                    dp_val = int(fmt_vals[format_idx["DP"]]) if "DP" in format_idx else None
+                except (ValueError, IndexError):
+                    dp_val = None
+
+                info_kv = _parse_info(info)
+                csq_per_alt: dict[str, list[dict[str, str]]] = {}
+                if csq_fields and "CSQ" in info_kv:
+                    csq_per_alt = _parse_csq(info_kv["CSQ"], csq_fields)
+
+                # Iterate ALT alleles — supports multi-allelic sites natively.
+                for alt_idx, alt_allele in enumerate(alt.split(",")):
+                    key = (chrom, int(pos), ref, alt_allele)
+                    jv = table.setdefault(
+                        key,
+                        JointVariant(chrom=chrom, pos=int(pos), ref=ref, alt=alt_allele),
+                    )
+                    # For multi-allelic GT (e.g. "0/2"), reduce to alt-count for *this* alt index.
+                    jv.genotypes[member_id] = _alt_count_for(gt_str, alt_idx + 1) if "," in alt else gt
+                    if dp_val is not None:
+                        jv.depths[member_id] = dp_val
+                    if filt and filt != "PASS":
+                        jv.filters[member_id] = filt
+                    if csq_per_alt:
+                        # Match CSQ entries by Allele field (VEP key on the alt sequence).
+                        matches = csq_per_alt.get(alt_allele, []) or csq_per_alt.get(_csq_allele(ref, alt_allele), [])
+                        if matches and not jv.csq:  # don't overwrite if another member already set
+                            jv.csq = matches
     return list(table.values())
+
+
+def _parse_csq_format(header_line: str) -> list[str]:
+    """Extract the pipe-delimited field list from a ##INFO=<ID=CSQ,...,Format=A|B|C> line."""
+    # The Format=... segment ends with a closing quote or the trailing >.
+    marker = "Format: "
+    if marker not in header_line:
+        marker = "Format="
+    i = header_line.find(marker)
+    if i < 0:
+        return []
+    rest = header_line[i + len(marker):]
+    # Trim trailing quote/> noise.
+    rest = rest.strip(' "').rstrip('">').strip()
+    return [f.strip() for f in rest.split("|") if f.strip()]
+
+
+def _parse_info(info: str) -> dict[str, str]:
+    """Parse the VCF INFO column into a dict. Flag keys map to ''."""
+    out: dict[str, str] = {}
+    if not info or info == ".":
+        return out
+    for tok in info.split(";"):
+        if "=" in tok:
+            k, _, v = tok.partition("=")
+            out[k] = v
+        else:
+            out[tok] = ""
+    return out
+
+
+def _parse_csq(raw: str, fields: list[str]) -> dict[str, list[dict[str, str]]]:
+    """Split a CSQ INFO value into per-alt-allele lists of field dicts.
+
+    Returns {allele_key: [{field: value, ...}, ...]} keyed by the CSQ
+    'Allele' field. Caller maps allele_key back onto the VCF ALT.
+    """
+    out: dict[str, list[dict[str, str]]] = {}
+    if not raw:
+        return out
+    try:
+        allele_idx = fields.index("Allele")
+    except ValueError:
+        allele_idx = 0
+    for entry in raw.split(","):
+        vals = entry.split("|")
+        if len(vals) < len(fields):
+            vals = vals + [""] * (len(fields) - len(vals))
+        rec = {fields[i]: vals[i] for i in range(len(fields))}
+        allele = vals[allele_idx]
+        out.setdefault(allele, []).append(rec)
+    return out
+
+
+def _csq_allele(ref: str, alt: str) -> str:
+    """VEP's allele encoding for indels: insertions report the inserted bases
+    only, deletions report '-'. Most VEP outputs use the raw alt; this is a
+    best-effort fallback for the trimmed-allele convention."""
+    if len(ref) == 1 and len(alt) > 1 and alt.startswith(ref):
+        return alt[1:]  # insertion
+    if len(alt) == 1 and len(ref) > 1 and ref.startswith(alt):
+        return "-"      # deletion
+    return alt
+
+
+def _alt_count_for(gt: str, target_alt_idx: int) -> Optional[int]:
+    """Count occurrences of `target_alt_idx` in a (possibly multi-allelic) GT string."""
+    if not gt or gt.startswith("."):
+        return None
+    parts = gt.replace("|", "/").split("/")
+    try:
+        return sum(1 for p in parts if p != "." and int(p) == target_alt_idx)
+    except ValueError:
+        return None
 
 
 def _parse_gt(gt: str) -> Optional[int]:

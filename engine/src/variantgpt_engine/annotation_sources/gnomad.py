@@ -1,16 +1,22 @@
 """gnomAD v4 GraphQL adapter (PRD §4.4, §6.7).
 
-Fetches per-ancestry AF — global (joint) and `sas` specifically — from the
-public gnomAD GraphQL endpoint. Returns PopulationAF rows; ancestry filtering
-happens client-side because gnomAD's GraphQL exposes per-population counts in
-the same payload.
+Fetches per-ancestry AF — global (joint = exomes + genomes when available, else
+exome alone) and the `sas` (South Asian) slice — from the public gnomAD GraphQL.
 
-Notes:
-  - The endpoint expects HGVS-style variantId: `1-55051215-G-A` (no `chr`).
-  - We always request `dataset: gnomad_r4` (genomes + exomes joined).
-  - On any network/parse failure we return an empty list so the pipeline
-    degrades gracefully (matches the "deterministic result always renders"
-    contract in PRD §6.7).
+Schema notes (verified against gnomad.broadinstitute.org/api Nov 2025):
+  - variantId is `1-55051215-G-A` (no `chr`), dataset is `gnomad_r4`.
+  - Response field names are snake_case: `variant_id`, not `variantId`.
+  - `joint` exposes ac/an + per-population ac/an, but NO precomputed `af` —
+    we compute it client-side as ac/an. The old query asked for `joint { af }`
+    which is why every call was 400-ing.
+  - Population IDs include `sas`, `nfe`, `eas`, `afr`, `amr`, `asj`, `fin`,
+    `mid`, `remaining`, plus `<id>_XX`/`<id>_XY` sex strata which we ignore.
+  - When `joint` is null we fall back to `exome` (smaller cohort but still
+    informative).
+
+On any network/parse failure we return an empty list so the pipeline degrades
+gracefully (matches the "deterministic result always renders" contract in PRD
+§6.7).
 """
 from __future__ import annotations
 
@@ -29,8 +35,13 @@ DATASET = "gnomad_r4"
 _QUERY = """
 query VariantAF($variantId: String!, $datasetId: DatasetId!) {
   variant(variantId: $variantId, dataset: $datasetId) {
-    variantId
+    variant_id
     joint {
+      ac
+      an
+      populations { id ac an }
+    }
+    exome {
       ac
       an
       af
@@ -46,11 +57,20 @@ def _variant_id(chrom: str, pos: int, ref: str, alt: str) -> str:
     return f"{c}-{pos}-{ref}-{alt}"
 
 
+def _af(ac: Optional[int], an: Optional[int]) -> Optional[float]:
+    if not an:
+        return None
+    return (ac or 0) / an
+
+
 def lookup(
     chrom: str, pos: int, ref: str, alt: str,
     *, timeout: float = 5.0, client: Optional[httpx.Client] = None,
 ) -> list[PopulationAF]:
-    """Return [PopulationAF(global), PopulationAF(sas)] (only populated rows)."""
+    """Return up to two rows: gnomad_v4_global + gnomad_v4_sas.
+
+    Empty list if the variant is unknown to gnomAD or the request fails.
+    """
     vid = _variant_id(chrom, pos, ref, alt)
     owns_client = client is None
     client = client or httpx.Client(timeout=timeout, headers={"User-Agent": "variantgpt-engine/0.1"})
@@ -68,24 +88,36 @@ def lookup(
         if owns_client:
             client.close()
 
+    if payload.get("errors"):
+        log.debug("gnomAD returned errors for %s: %s", vid, payload["errors"])
+
     variant = (payload.get("data") or {}).get("variant")
-    if not variant or not variant.get("joint"):
+    if not variant:
         return []
-    joint = variant["joint"]
-    out: list[PopulationAF] = [
-        PopulationAF(
-            source="gnomad_v4_global",
-            ac=joint.get("ac"), an=joint.get("an"), af=joint.get("af"),
-        ),
-    ]
-    for pop in joint.get("populations") or []:
+
+    # Prefer 'joint' (exomes + genomes); fall back to 'exome' alone if joint missing.
+    src = variant.get("joint") or variant.get("exome")
+    if not src:
+        return []
+
+    global_ac = src.get("ac")
+    global_an = src.get("an")
+    global_af = src.get("af")  # 'exome' has it, 'joint' doesn't — compute if missing.
+    if global_af is None:
+        global_af = _af(global_ac, global_an)
+
+    out: list[PopulationAF] = [PopulationAF(
+        source="gnomad_v4_global",
+        ac=global_ac, an=global_an, af=global_af,
+    )]
+    # Filter populations to the SAS slice (skip XX/XY strata).
+    for pop in src.get("populations") or []:
         if pop.get("id") == "sas":
-            an = pop.get("an") or 0
-            ac = pop.get("ac") or 0
             out.append(PopulationAF(
                 source="gnomad_v4_sas",
-                ac=ac, an=an,
-                af=(ac / an) if an else None,
+                ac=pop.get("ac"),
+                an=pop.get("an"),
+                af=_af(pop.get("ac"), pop.get("an")),
             ))
             break
     return out
@@ -95,9 +127,10 @@ def lookup_batch(
     variants: Iterable[tuple[str, int, str, str]],
     *, timeout: float = 5.0,
 ) -> dict[tuple[str, int, str, str], list[PopulationAF]]:
-    """Sequential batch — gnomAD GraphQL has per-request rate limits; the Worker
-    layer caches results via the AI Gateway HTTP cache. Persist beyond the
-    engine run by writing into the populations table."""
+    """Sequential batch — reuses a single HTTPX client (TCP keep-alive). gnomAD
+    GraphQL doesn't have a true bulk-variant query; each variant is one request.
+    The Worker layer caches via the AI Gateway HTTP cache so repeat queries are
+    near-free."""
     out: dict[tuple[str, int, str, str], list[PopulationAF]] = {}
     with httpx.Client(timeout=timeout, headers={"User-Agent": "variantgpt-engine/0.1"}) as client:
         for v in variants:

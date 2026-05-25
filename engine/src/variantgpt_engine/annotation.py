@@ -16,6 +16,7 @@ import logging
 from dataclasses import dataclass, field
 
 from .annotation_sources import gnomad
+from .annotation_sources.csq import apply_csq
 from .annotation_sources.tabix_track import TrackConfig, lookup_all as tabix_lookup
 from .joint import JointVariant
 from .models import PopulationAF, PredictorScores, Variant
@@ -43,6 +44,13 @@ def annotate(jv: JointVariant, ctx: AnnotationContext) -> Variant:
         populations=_population_af(jv, ctx),
         predictors=_predictors(jv, ctx),
     )
+    # 1. Prefer VEP CSQ if the input VCF was pre-annotated (most clinical
+    #    pipelines run VEP before sharing). Free, fast, no external calls.
+    apply_csq(v, jv)
+    # 2. Demo-data overlay: curated 11-variant lookup (used by build_demo_case).
+    #    Runs after CSQ so the demo case still wins on its own variants, but
+    #    real CSQ-annotated variants get their gene/HGVS without needing a
+    #    demo entry.
     if ctx.use_demo_annotations:
         _apply_demo_annotation(v)
     return v
