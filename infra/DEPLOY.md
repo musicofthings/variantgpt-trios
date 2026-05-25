@@ -13,70 +13,83 @@ Fly.io (variantgpt-engine)      ← Python engine (Starlette HTTP on :8080)
         │ → Engine POSTs progress to Worker /api/internal/engine-callback/:id
 ```
 
-Prereqs: a Cloudflare account, a Fly.io account, both CLIs installed and logged in.
+Prereqs: Cloudflare account, Fly.io account, GitHub repo (already wired). Local installs needed: only `wrangler` and `gh` (no local flyctl, no local Docker).
 
 ```powershell
-npm i -g wrangler            # already installed (4.85.0)
-iwr https://fly.io/install.ps1 -useb | iex
-wrangler login
-fly auth login
+npm i -g wrangler             # already installed (4.85.0)
+wrangler login                # already done
+gh auth login                 # already done
 ```
 
 ---
 
-## 1. Deploy the engine to Fly.io
+## 1. Deploy the engine via GitHub Actions (no local flyctl)
 
+We don't install flyctl locally; CI does it. You just need to add three GitHub repo secrets and push — `.github/workflows/deploy.yml` handles the rest.
+
+**1a. Sign up for Fly.io (web):** https://fly.io/app/sign-up
+
+**1b. Mint a Fly API token:** https://fly.io/user/personal_access_tokens → **Create access token** → copy the value (starts with `fo1_…`).
+
+**1c. Generate a long-random ENGINE_BEARER** in PowerShell:
 ```powershell
-# From repo root (where fly.toml lives).
-cd D:\Projects\VariantGPT
-fly launch --no-deploy --copy-config --name variantgpt-engine --region iad
-# Choose region: "iad" (Virginia, US-East), "bom" (Mumbai), "fra" (Frankfurt), etc.
-
-# Mint a long-random shared bearer (the Worker also gets this same value).
 $bearer = -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 48 | % { [char]$_ })
-fly secrets set ENGINE_BEARER=$bearer
-
-# Remote build (no local Docker needed) + deploy.
-fly deploy --remote-only
+$bearer    # copy this; you'll paste it twice
 ```
 
-After deploy, note the public URL (usually `https://variantgpt-engine.fly.dev`). Smoke test:
+**1d. Add the secrets to the GitHub repo:**
+```powershell
+cd D:\Projects\VariantGPT
+gh secret set FLY_API_TOKEN -R musicofthings/variantgpt-trios          # paste fo1_…
+gh secret set ENGINE_BEARER -R musicofthings/variantgpt-trios          # paste $bearer
+gh secret set CLOUDFLARE_API_TOKEN -R musicofthings/variantgpt-trios   # see step 3
+gh secret set CLOUDFLARE_ACCOUNT_ID -R musicofthings/variantgpt-trios  # 3b54d713791d243cfbed61dfeb46e1fc
+```
 
+**1e. Push to main → CI deploys.** The `engine` job runs `flyctl deploy --remote-only` which builds the image in Fly's cloud and provisions the app on first run.
+
+Watch the run:
+```powershell
+gh run watch -R musicofthings/variantgpt-trios
+```
+
+After it succeeds, the engine is live at `https://variantgpt-engine.fly.dev`. Smoke test:
 ```powershell
 curl https://variantgpt-engine.fly.dev/healthz       # {"ok": true}
 ```
 
-**Save `$bearer` somewhere** — you'll paste it into the Worker secrets in step 4.
-
 ---
 
-## 2. Create the D1 database
+## 2. D1 database (already provisioned)
 
+`variantgpt-db` (`08b9511b-69c6-49e1-ae83-36a16fe90a28`) is wired in `app/api/wrangler.toml` and migrations 0001 + 0002 are already applied to it.
+
+To re-apply after schema changes:
 ```powershell
 cd D:\Projects\VariantGPT\app\api
-wrangler d1 create variantgpt
-```
-
-Wrangler prints a UUID — paste it into `app/api/wrangler.toml` replacing `REPLACE_WITH_D1_ID`. Then apply migrations:
-
-```powershell
-wrangler d1 migrations apply variantgpt --remote
+wrangler d1 migrations apply variantgpt-db --remote
 ```
 
 ---
 
-## 3. Create the R2 bucket + API token
+## 3. R2 bucket (already provisioned) + API token
 
-```powershell
-wrangler r2 bucket create variantgpt
-```
+The `variantgpt` bucket exists. Mint an R2 token for sigv4 presigning:
 
-Mint an R2 access token in the Cloudflare dashboard:
-**R2 → Manage R2 API Tokens → Create API Token**
+**Cloudflare dashboard → R2 → Manage R2 API Tokens → Create API Token**
 - Permissions: **Object Read & Write**
-- Bucket: **variantgpt**
+- Specify bucket: **variantgpt**
 
-Copy the **Access Key ID** and **Secret Access Key**. Also note your **Cloudflare Account ID** (top-right of the dashboard, or `wrangler whoami`).
+Copy the **Access Key ID** and **Secret Access Key**.
+
+You also need a **Cloudflare API Token** for CI deploys (separate from the R2 token):
+
+**Cloudflare dashboard → My Profile → API Tokens → Create Token → Custom token**
+- Permissions: Account: **Workers Scripts** Edit + **Cloudflare Pages** Edit + **D1** Edit + **Workers R2 Storage** Edit + **Account Settings** Read
+- Account Resources: include your account
+- Copy the token value.
+
+Add the API token to GitHub secrets (you already did this in step 1d if you followed the flow above).
 
 ---
 

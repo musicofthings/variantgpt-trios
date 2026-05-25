@@ -1,0 +1,82 @@
+name: deploy
+
+# Deploys on every push to main. Three jobs run in dependency order:
+#   1. engine   → Fly.io (creates app + sets secrets if needed, then deploys)
+#   2. api      → Cloudflare Worker (uses CLOUDFLARE_API_TOKEN secret)
+#   3. web      → Cloudflare Pages (depends on api so VITE_API_BASE points
+#                 at the freshly-deployed Worker URL)
+#
+# Secrets the repo needs (GitHub → Settings → Secrets and variables → Actions):
+#   FLY_API_TOKEN             — from https://fly.io/user/personal_access_tokens
+#   ENGINE_BEARER             — long-random string; same value the Worker uses
+#   CLOUDFLARE_API_TOKEN      — Cloudflare API token w/ Workers + R2 + D1 + Pages
+#   CLOUDFLARE_ACCOUNT_ID     — 3b54d713791d243cfbed61dfeb46e1fc
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  engine:
+    name: Deploy engine (Fly.io)
+    runs-on: ubuntu-latest
+    concurrency: { group: fly-engine, cancel-in-progress: false }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      # `fly deploy` creates the app on first run if it doesn't exist yet.
+      # We also push ENGINE_BEARER as a Fly secret on every run so a rotation
+      # in GitHub propagates automatically.
+      - name: Set bearer secret
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          flyctl secrets set --app variantgpt-engine \
+            ENGINE_BEARER='${{ secrets.ENGINE_BEARER }}' \
+            --stage
+
+      - name: Deploy
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: flyctl deploy --remote-only --app variantgpt-engine
+
+  api:
+    name: Deploy Worker (Cloudflare)
+    runs-on: ubuntu-latest
+    needs: engine
+    defaults: { run: { working-directory: app/api } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - run: npm ci || npm install
+      - run: npm run typecheck
+      - name: wrangler deploy
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: app/api
+
+  web:
+    name: Deploy SPA (Cloudflare Pages)
+    runs-on: ubuntu-latest
+    needs: api
+    defaults: { run: { working-directory: app/web } }
+    env:
+      VITE_API_BASE: https://variantgpt-api.musicofthings.workers.dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - run: npm ci || npm install
+      - run: npm run build
+      - name: wrangler pages deploy
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: app/web
+          command: pages deploy dist --project-name=variantgpt-web --branch=main

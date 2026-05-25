@@ -6,8 +6,8 @@ compatibility_flags = ["nodejs_compat"]
 # D1 — metadata + decisions + audit (NOT raw genotypes beyond candidates).
 [[d1_databases]]
 binding = "DB"
-database_name = "variantgpt"
-database_id = "REPLACE_WITH_D1_ID"
+database_name = "variantgpt-db"
+database_id = "08b9511b-69c6-49e1-ae83-36a16fe90a28"
 migrations_dir = "../../infra/migrations"
 
 # R2 — VCFs, tabix tracks (range-read), reports, generated case.json artifacts.
