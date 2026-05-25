@@ -51,7 +51,15 @@ sys.path.insert(0, str(THIS.parent))
 sys.path.insert(0, str(THIS.parents[1] / "engine" / "src"))
 
 from variantgpt_engine.pedigree import load_ped  # noqa: E402
-from variantgpt_engine.pipeline import run_case  # noqa: E402
+from variantgpt_engine.acmg import classify  # noqa: E402
+from variantgpt_engine.annotation import AnnotationContext, annotate  # noqa: E402
+from variantgpt_engine.build_detect import detect_build  # noqa: E402
+from variantgpt_engine.inheritance import assign_models, compound_het_pass  # noqa: E402
+from variantgpt_engine.joint import merge  # noqa: E402
+from variantgpt_engine.models import Build, CaseEmission, HPOTerm, Variant  # noqa: E402
+from variantgpt_engine.prioritize import priority  # noqa: E402
+from variantgpt_engine.qc import compute_qc  # noqa: E402
+from variantgpt_engine.reclassify import reclassify_all  # noqa: E402
 from run_uploaded_case import _build_ped, _ensure_uncompressed_vcf, _find_member  # noqa: E402
 
 
@@ -175,26 +183,93 @@ async def _execute_job(job: dict[str, Any]) -> None:
             emit(f"members={len(manifest['pedigree'])} present={present_count} vcfs={len(vcf_map)}")
             await post_status("running")  # surface log/manifest progress
 
-            # 3. Run the engine. run_case is synchronous and can take a few
-            # seconds; offload to a worker thread so the event loop stays
-            # responsive (callbacks, health checks, SIGTERM handlers).
+            # 3. Run the engine pipeline step by step. Each step runs in a
+            # worker thread (it's CPU-bound, synchronous code) so the event
+            # loop stays responsive between phases — gives us crisp log
+            # checkpoints to localize hangs.
             emit("loading PED")
             pedigree = load_ped(ped_path)
-            emit("starting engine pipeline")
+
+            emit("detecting build")
+            resolved_build: Build = Build.grch38
+            for p in vcf_map.values():
+                b = await asyncio.to_thread(detect_build, p)
+                if b is not None:
+                    resolved_build = b
+                    break
+            emit(f"build={resolved_build.value}")
             await post_status("running")
-            try:
-                emission = await asyncio.to_thread(
-                    run_case,
-                    case_id=case_id,
-                    pedigree=pedigree,
-                    vcf_paths=vcf_map,
-                    hpo_ids=manifest.get("hpo", []),
-                    build="auto",
-                    use_demo_annotations=True,
-                )
-            except Exception as e:  # noqa: BLE001 — re-emit with context
-                emit(f"engine pipeline failed: {type(e).__name__}: {e}")
-                raise
+
+            emit("merging VCFs")
+            joint = await asyncio.to_thread(merge, vcf_map)
+            emit(f"merged: {len(joint)} joint variants")
+            await post_status("running")
+
+            emit("computing QC")
+            qc = await asyncio.to_thread(compute_qc, joint, pedigree)
+            emit("QC done")
+
+            track_versions = {"engine": "0.1.0", "demo_dataset": "v1"}
+            ctx = AnnotationContext(
+                build=resolved_build.value,
+                track_versions=track_versions,
+                use_gnomad=False,
+                use_demo_annotations=True,
+            )
+
+            emit(f"annotating {len(joint)} variants")
+            variants: list[Variant] = []
+            for i, jv in enumerate(joint):
+                def _ann_one(jv=jv) -> Variant:
+                    models, conf = assign_models(jv, pedigree)
+                    v = annotate(jv, ctx)
+                    v.inheritance_models = models
+                    v.inheritance_confidence = conf  # type: ignore[assignment]
+                    return v
+                try:
+                    v = await asyncio.to_thread(_ann_one)
+                except Exception as e:  # noqa: BLE001
+                    emit(f"annotate failed at variant {i} ({jv.chrom}:{jv.pos}): {type(e).__name__}: {e}")
+                    raise
+                variants.append(v)
+            emit("annotation done")
+            await post_status("running")
+
+            emit("compound-het pass")
+            addl = await asyncio.to_thread(
+                compound_het_pass,
+                [(jv, v.gene) for jv, v in zip(joint, variants)],
+                pedigree,
+            )
+            for v, jv in zip(variants, joint):
+                if jv.key in addl:
+                    v.inheritance_models = list(dict.fromkeys(v.inheritance_models + addl[jv.key]))
+
+            emit("classifying")
+            hpo_ids = manifest.get("hpo", [])
+            for v in variants:
+                tier, points, ledger = await asyncio.to_thread(classify, v)
+                v.baseline_tier = tier
+                v.baseline_points = points
+                v.evidence = ledger
+                priority(v, hpo_ids)
+            emit("classification done")
+
+            emit("reclassifying (South Asian)")
+            proposals = await asyncio.to_thread(
+                reclassify_all, variants, snapshot_versions=track_versions
+            )
+
+            emission = CaseEmission(
+                case_id=case_id,
+                build=resolved_build,
+                pedigree=pedigree,
+                hpo=[HPOTerm(hpo_id=h) for h in hpo_ids],
+                qc=qc,
+                variants=variants,
+                proposals=proposals,
+                versions=track_versions,
+            )
             emit(f"variants={len(emission.variants)} proposals={len(emission.proposals)}")
             await post_status("running")
 
