@@ -60,6 +60,7 @@ from variantgpt_engine.filter import filter_candidates  # noqa: E402
 from variantgpt_engine.inheritance import assign_models, compound_het_pass  # noqa: E402
 from variantgpt_engine.joint import merge  # noqa: E402
 from variantgpt_engine.models import Build, CaseEmission, HPOTerm, Variant  # noqa: E402
+from variantgpt_engine.preprocess import PreprocessConfig, preprocess_vcf  # noqa: E402
 from variantgpt_engine.prioritize import priority  # noqa: E402
 from variantgpt_engine.qc import compute_qc  # noqa: E402
 from variantgpt_engine.reclassify import reclassify_all  # noqa: E402
@@ -174,15 +175,36 @@ async def _execute_job(job: dict[str, Any]) -> None:
             ped_path = workdir / "family.ped"
             ped_path.write_text(_build_ped(case_id, manifest["pedigree"]), encoding="utf-8")
 
+            # Per-VCF: gunzip if needed → run the standard preprocessing pipeline
+            # (validate, normalize chrom, split multi-allelic, trim alleles,
+            # apply site + genotype QC, dedupe, sort). Output is the .clean.vcf
+            # that the joint matrix consumes — guarantees consistent allele
+            # representation across all three samples (critical for the merge
+            # to align variants by (chrom, pos, ref, alt)).
             vcf_map: dict[str, Path] = {}
             for role, fname in manifest.get("files", {}).items():
                 src = workdir / fname
                 member = _find_member(manifest["pedigree"], role)
                 if not member:
                     raise RuntimeError(f"no pedigree member for role={role}")
-                vcf_map[member["id"]] = _ensure_uncompressed_vcf(
-                    src, workdir / f"{member['id']}.vcf"
+                raw = _ensure_uncompressed_vcf(src, workdir / f"{member['id']}.raw.vcf")
+                clean = workdir / f"{member['id']}.clean.vcf"
+                emit(f"preprocess {role}: {raw.name} -> {clean.name}")
+                rep = await asyncio.to_thread(
+                    preprocess_vcf, raw, clean,
+                    config=PreprocessConfig(),  # clinical defaults; override later via manifest
                 )
+                emit(
+                    f"  {role}: in={rep.input_records} out={rep.output_records} "
+                    f"split={rep.multi_allelic_split} trimmed={rep.trimmed_alleles} "
+                    f"dedup={rep.dropped_duplicate} dropped_filter={rep.dropped_filtered} "
+                    f"dropped_qual={rep.dropped_low_qual} dropped_homref={rep.dropped_hom_ref} "
+                    f"gt_gq_filtered={rep.gt_filtered_low_gq} gt_dp_filtered={rep.gt_filtered_low_dp} "
+                    f"gt_ab_filtered={rep.gt_filtered_bad_ab} ({rep.elapsed_ms}ms)"
+                )
+                for w in rep.warnings[:5]:
+                    emit(f"  warn: {w}")
+                vcf_map[member["id"]] = clean
 
             has_proband = any(
                 m["role"] == "proband" and not m.get("missing") and m["id"] in vcf_map
