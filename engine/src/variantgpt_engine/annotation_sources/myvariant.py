@@ -29,7 +29,7 @@ from typing import Iterable, Optional
 import httpx
 
 from ..joint import JointVariant
-from ..models import ClinVarRecord, PredictorScores, Variant
+from ..models import ClinVarRecord, PopulationAF, PredictorScores, Variant
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +43,24 @@ FIELDS = ",".join([
     "clinvar.rcv.review_status",
     "clinvar.rcv.accession",
     "clinvar.variant_id",
+    # gnomAD AFs (global + per-population). myvariant.info exposes both
+    # gnomad_exome and gnomad_genome; we take whichever is present per
+    # variant, preferring the joint signal (exomes + genomes) — myvariant
+    # publishes them separately so we union them downstream.
+    "gnomad_exome.af.af",
+    "gnomad_exome.af.af_sas",
+    "gnomad_exome.ac.ac",
+    "gnomad_exome.ac.ac_sas",
+    "gnomad_exome.an.an",
+    "gnomad_exome.an.an_sas",
+    "gnomad_exome.hom",
+    "gnomad_genome.af.af",
+    "gnomad_genome.af.af_sas",
+    "gnomad_genome.ac.ac",
+    "gnomad_genome.ac.ac_sas",
+    "gnomad_genome.an.an",
+    "gnomad_genome.an.an_sas",
+    "gnomad_genome.hom",
     # dbNSFP predictors
     "dbnsfp.revel.score",
     "dbnsfp.cadd.phred",
@@ -83,6 +101,69 @@ def hgvs_id(jv: JointVariant) -> Optional[str]:
         return f"{chrom}:g.{start}_{end}del"
     # Multi-nucleotide substitution: delins
     return f"{chrom}:g.{jv.pos}_{jv.pos + len(ref) - 1}delins{alt}"
+
+
+def fetch_af_for_filtering(
+    joints: Iterable[JointVariant],
+    *,
+    timeout: float = 30.0,
+    assembly: str = "hg38",
+) -> dict[tuple[str, int, str, str], float]:
+    """Pre-annotation: ask myvariant.info for the max global AF of each variant.
+
+    Used to apply the rare-variant filter to VCFs that lack INFO/AF or CSQ
+    annotation. The result maps (chrom, pos, ref, alt) → max_af (combined
+    gnomAD exome + genome), or absent from the map if myvariant.info has
+    no record (treat as "unknown / probably rare").
+
+    Batched 1000/req via myvariant.info POST. Empty AFs are intentionally
+    omitted from the result so the caller can decide whether to keep
+    unknown-AF variants (default: keep).
+    """
+    joints_list = list(joints)
+    if not joints_list:
+        return {}
+    by_id: dict[str, JointVariant] = {}
+    for jv in joints_list:
+        vid = hgvs_id(jv)
+        if vid:
+            by_id[vid] = jv
+    if not by_id:
+        return {}
+
+    out: dict[tuple[str, int, str, str], float] = {}
+    ids = list(by_id.keys())
+    with httpx.Client(timeout=timeout, headers={"User-Agent": "variantgpt-engine/0.1"}) as client:
+        for i in range(0, len(ids), BATCH_SIZE):
+            chunk = ids[i:i + BATCH_SIZE]
+            try:
+                resp = client.post(
+                    MYVARIANT_URL,
+                    data={
+                        "ids": ",".join(chunk),
+                        "fields": "gnomad_exome.af.af,gnomad_genome.af.af",
+                        "assembly": assembly,
+                    },
+                )
+                resp.raise_for_status()
+                results = resp.json()
+            except (httpx.HTTPError, ValueError) as exc:
+                log.warning("myvariant.info filter batch %d failed: %s", i, exc)
+                continue
+            if not isinstance(results, list):
+                continue
+            for entry in results:
+                vid = entry.get("query") or entry.get("_id")
+                jv = by_id.get(vid)
+                if not jv:
+                    continue
+                af = max(
+                    _to_float(_nested(entry, "gnomad_exome", "af", "af")) or 0.0,
+                    _to_float(_nested(entry, "gnomad_genome", "af", "af")) or 0.0,
+                )
+                if af > 0:
+                    out[jv.key] = af
+    return out
 
 
 def annotate_variants(
@@ -141,6 +222,14 @@ def annotate_variants(
                 cv = _project_clinvar(entry.get("clinvar"))
                 if cv:
                     v.clinvar = cv
+                    annotated += 1
+                pops = _project_gnomad(entry.get("gnomad_exome"), entry.get("gnomad_genome"))
+                if pops:
+                    # Replace populations from myvariant.info as authoritative —
+                    # they're the canonical AF/AC/AN from the actual database, and
+                    # we don't want to double-count against any partial AFs that
+                    # leaked in earlier.
+                    v.populations = pops
                     annotated += 1
                 preds = _project_dbnsfp(entry.get("dbnsfp"))
                 if preds:
@@ -218,6 +307,56 @@ def _project_clinvar(raw) -> Optional[ClinVarRecord]:
         conditions=conditions[:5],          # cap UI noise
         variation_id=raw.get("variant_id") or primary.get("accession"),
     )
+
+
+def _project_gnomad(exome: Optional[dict], genome: Optional[dict]) -> list[PopulationAF]:
+    """Build PopulationAF rows from myvariant.info gnomad_exome/genome blocks.
+
+    We emit gnomad_v4_global + gnomad_v4_sas — same source tags the rest of the
+    pipeline expects (filter.py, reclassify.py). When both exome and genome
+    cohorts report this variant we sum AC/AN to get the joint signal; when
+    only one is present we use it alone.
+    """
+    if not exome and not genome:
+        return []
+    out: list[PopulationAF] = []
+    # Combine global counts across exome+genome.
+    e_ac = _to_float(_nested(exome, "ac", "ac")) or 0.0 if exome else 0.0
+    e_an = _to_float(_nested(exome, "an", "an")) or 0.0 if exome else 0.0
+    g_ac = _to_float(_nested(genome, "ac", "ac")) or 0.0 if genome else 0.0
+    g_an = _to_float(_nested(genome, "an", "an")) or 0.0 if genome else 0.0
+    total_ac = e_ac + g_ac
+    total_an = e_an + g_an
+    if total_an > 0:
+        out.append(PopulationAF(
+            source="gnomad_v4_global",
+            ac=int(total_ac) if total_ac else None,
+            an=int(total_an) if total_an else None,
+            af=(total_ac / total_an) if total_an else None,
+        ))
+    else:
+        # Fall back to whichever cohort has a precomputed AF.
+        af_e = _to_float(_nested(exome, "af", "af")) if exome else None
+        af_g = _to_float(_nested(genome, "af", "af")) if genome else None
+        af = af_e if af_e is not None else af_g
+        if af is not None:
+            out.append(PopulationAF(source="gnomad_v4_global", af=af))
+
+    # SAS-specific counts. Same exome+genome combine.
+    e_ac_sas = _to_float(_nested(exome, "ac", "ac_sas")) or 0.0 if exome else 0.0
+    e_an_sas = _to_float(_nested(exome, "an", "an_sas")) or 0.0 if exome else 0.0
+    g_ac_sas = _to_float(_nested(genome, "ac", "ac_sas")) or 0.0 if genome else 0.0
+    g_an_sas = _to_float(_nested(genome, "an", "an_sas")) or 0.0 if genome else 0.0
+    total_ac_sas = e_ac_sas + g_ac_sas
+    total_an_sas = e_an_sas + g_an_sas
+    if total_an_sas > 0:
+        out.append(PopulationAF(
+            source="gnomad_v4_sas",
+            ac=int(total_ac_sas) if total_ac_sas else None,
+            an=int(total_an_sas) if total_an_sas else None,
+            af=(total_ac_sas / total_an_sas) if total_an_sas else None,
+        ))
+    return out
 
 
 def _project_dbnsfp(raw) -> Optional[PredictorScores]:

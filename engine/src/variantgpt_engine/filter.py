@@ -24,6 +24,7 @@ from typing import Iterable
 
 from .annotation_sources.csq import pick_canonical
 from .joint import JointVariant
+from .models import Affected, Pedigree
 
 
 # Consequences we drop outright when seen. SO terms; VEP emits them
@@ -40,6 +41,38 @@ BENIGN_CONSEQUENCES = frozenset({
     "feature_elongation",
     "feature_truncation",
 })
+
+
+def proband_carrier_filter(
+    joint: Iterable[JointVariant], pedigree: Pedigree,
+) -> tuple[list[JointVariant], int]:
+    """Drop variants the proband doesn't carry.
+
+    Every inheritance model in trio analysis (de novo, AR hom, comp het, AD
+    inherited, X-linked, mito) requires the proband to carry the variant
+    (GT ∈ {0/1, 1/1, 1}). Sites where the proband is 0/0 or ./. cannot be
+    candidates and shouldn't pay the cost of annotation.
+
+    For multi-proband pedigrees: keep variants carried by ANY affected member.
+
+    Returns (kept, dropped_count).
+    """
+    affected_ids = [m.id for m in pedigree.members if m.affected == Affected.affected]
+    if not affected_ids:
+        # No affected member identified — treat anyone listed as proband.
+        affected_ids = [m.id for m in pedigree.members if m.role == "proband"]
+    if not affected_ids:
+        # Degenerate input — pass through.
+        return list(joint), 0
+
+    kept: list[JointVariant] = []
+    dropped = 0
+    for jv in joint:
+        if any(jv.genotypes.get(mid) and jv.genotypes[mid] > 0 for mid in affected_ids):
+            kept.append(jv)
+        else:
+            dropped += 1
+    return kept, dropped
 
 
 @dataclass

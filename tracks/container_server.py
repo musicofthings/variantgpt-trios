@@ -56,7 +56,7 @@ from variantgpt_engine.annotation import AnnotationContext, annotate  # noqa: E4
 from variantgpt_engine.annotation_sources import myvariant, vep_rest  # noqa: E402
 from variantgpt_engine.annotation_sources.csq import pick_canonical  # noqa: E402
 from variantgpt_engine.build_detect import detect_build  # noqa: E402
-from variantgpt_engine.filter import filter_candidates  # noqa: E402
+from variantgpt_engine.filter import filter_candidates, proband_carrier_filter  # noqa: E402
 from variantgpt_engine.inheritance import assign_models, compound_het_pass  # noqa: E402
 from variantgpt_engine.joint import merge  # noqa: E402
 from variantgpt_engine.models import Build, CaseEmission, HPOTerm, Variant  # noqa: E402
@@ -252,9 +252,24 @@ async def _execute_job(job: dict[str, Any]) -> None:
             await post_status("running")
 
             if real_mode:
-                # Pre-filter: drop common variants and benign-by-construction
-                # consequences before any expensive annotation.
-                emit("filtering rare + coding")
+                # ── Stage 1: proband-carrier filter ──
+                # In trio analysis every inheritance model requires the proband
+                # to carry the variant. Sites where proband is 0/0 or ./.
+                # cannot be candidates and shouldn't pay the cost of annotation.
+                # Typical effect: drops ~50% of post-preprocessing variants.
+                emit("filter: proband-carrier")
+                joint_pc, dropped_pc = await asyncio.to_thread(
+                    proband_carrier_filter, joint, pedigree,
+                )
+                emit(f"filter: kept={len(joint_pc)} dropped_no_proband_carrier={dropped_pc}")
+                joint = joint_pc
+                await post_status("running")
+
+                # ── Stage 2: CSQ/INFO-based filter (cheap, in-process) ──
+                # Drop variants with AF in CSQ or benign-by-construction
+                # consequences. No-op for un-annotated VCFs but free when CSQ
+                # IS present (VEP-pre-annotated inputs).
+                emit("filter: rare + coding (CSQ-driven if present)")
                 joint_filtered, fstats = await asyncio.to_thread(
                     filter_candidates, joint, max_af=0.01, drop_filtered=True,
                 )
@@ -264,18 +279,32 @@ async def _execute_job(job: dict[str, Any]) -> None:
                     f"dropped_consequence={fstats.dropped_by_consequence} "
                     f"dropped_filter_field={fstats.dropped_by_filter_field}"
                 )
-                if len(joint_filtered) > MAX_VARIANTS_AFTER_FILTER:
-                    raise RuntimeError(
-                        f"after rare-variant + consequence filter, {len(joint_filtered)} "
-                        f"variants remain (cap: {MAX_VARIANTS_AFTER_FILTER}). The input "
-                        f"VCF likely doesn't carry AF annotation, so the AF filter couldn't "
-                        f"apply. Either pre-annotate with VEP (so CSQ + AF fields land on "
-                        f"each row) or filter the VCF locally before upload."
-                    )
                 joint = joint_filtered
                 await post_status("running")
 
-                # For survivors without CSQ, fall back to Ensembl VEP REST.
+                # ── Stage 3: live AF filter via myvariant.info ──
+                # If the proband filter didn't bring us under the cap, look up
+                # gnomAD AF for what remains (batched 1000/req) and drop anything
+                # with AF ≥ 1% in any cohort. Variants myvariant.info doesn't know
+                # are kept (likely rare/novel).
+                if len(joint) > MAX_VARIANTS_AFTER_FILTER // 2:
+                    emit(f"myvariant.info: AF lookup for {len(joint)} variants")
+                    af_map = await asyncio.to_thread(myvariant.fetch_af_for_filtering, joint)
+                    before = len(joint)
+                    joint = [jv for jv in joint if af_map.get(jv.key, 0.0) < 0.01]
+                    emit(f"myvariant.info: AF lookup done; dropped {before - len(joint)} common variants (kept {len(joint)})")
+                    await post_status("running")
+
+                if len(joint) > MAX_VARIANTS_AFTER_FILTER:
+                    raise RuntimeError(
+                        f"after all filters, {len(joint)} variants remain (cap: "
+                        f"{MAX_VARIANTS_AFTER_FILTER}). The input VCFs may be poorly "
+                        f"filtered upstream — consider running bcftools norm + "
+                        f"VQSR-passed filter before upload, or relax the cap via "
+                        f"MAX_VARIANTS_AFTER_FILTER in container_server.py."
+                    )
+
+                # ── Stage 4: VEP REST for survivors lacking CSQ ──
                 missing_csq = [jv for jv in joint if not jv.csq]
                 if missing_csq:
                     emit(f"VEP REST: annotating {len(missing_csq)} variants")
