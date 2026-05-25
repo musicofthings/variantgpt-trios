@@ -88,15 +88,14 @@ apiRouter.get("/hpo/search", async (c) => {
   const cached = await cache.match(cacheKey);
   if (cached) return cached;
 
-  // OLS supports two query modes — the user might type "HP:0001250" or
-  // "seizure". The /search endpoint covers both (id match by exact, label
-  // by fuzzy/prefix).
-  const olsUrl = new URL("https://www.ebi.ac.uk/ols4/api/search");
+  // /api/select is OLS's autocomplete endpoint — does prefix matching on
+  // label + synonym fields, which /search does not. "microceph" matches
+  // "Microcephaly" via /select; via /search it returns 0 results.
+  const olsUrl = new URL("https://www.ebi.ac.uk/ols4/api/select");
   olsUrl.searchParams.set("q", q);
   olsUrl.searchParams.set("ontology", "hp");
   olsUrl.searchParams.set("rows", String(limit));
   olsUrl.searchParams.set("fieldList", "obo_id,label,description,synonym,iri");
-  olsUrl.searchParams.set("queryFields", "obo_id,label,synonym");
 
   let upstream: Response;
   try {
