@@ -10,7 +10,6 @@
     "test": "vitest"
   },
   "dependencies": {
-    "@cloudflare/containers": "^0.0.13",
     "aws4fetch": "^1.0.20",
     "hono": "^4.6.3",
     "zod": "^3.23.8"

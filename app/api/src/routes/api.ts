@@ -148,13 +148,16 @@ apiRouter.post("/cases/:id/run", async (c) => {
        error=NULL, log_json='[]', manifest_json=excluded.manifest_json`,
   ).bind(id, Date.now(), JSON.stringify(manifest)).run();
 
-  // Invoke the container.
+  // Invoke the Fly-hosted engine. The engine returns 202 quickly, then runs
+  // the job in a background task; it posts progress to the callback URL.
   const callbackUrl = `${c.env.PUBLIC_API_BASE}/api/internal/engine-callback/${id}`;
-  const containerId = c.env.ENGINE.idFromName(id);
-  const stub = c.env.ENGINE.get(containerId);
-  const containerReq = new Request("http://engine/run", {
+  const engineUrl = `${c.env.ENGINE_BASE_URL.replace(/\/$/, "")}/run`;
+  const engineReq = fetch(engineUrl, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      "authorization": `Bearer ${c.env.ENGINE_BEARER}`,
+    },
     body: JSON.stringify({
       case_id: id,
       manifest,
@@ -164,19 +167,18 @@ apiRouter.post("/cases/:id/run", async (c) => {
       callback_secret: c.env.ENGINE_WEBHOOK_SECRET,
     }),
   });
-  // Fire-and-forget: container returns 202 immediately, then runs in background.
   c.executionCtx.waitUntil(
-    stub.fetch(containerReq).then(async (r) => {
+    engineReq.then(async (r) => {
       if (!r.ok) {
         const text = await r.text().catch(() => "");
         await c.env.DB.prepare(
           `UPDATE jobs SET status='error', error=?, finished_at=? WHERE case_id=?`,
-        ).bind(`container ${r.status}: ${text.slice(0, 200)}`, Date.now(), id).run();
+        ).bind(`engine ${r.status}: ${text.slice(0, 200)}`, Date.now(), id).run();
       }
     }).catch(async (e) => {
       await c.env.DB.prepare(
         `UPDATE jobs SET status='error', error=?, finished_at=? WHERE case_id=?`,
-      ).bind(`container invoke failed: ${String(e).slice(0, 200)}`, Date.now(), id).run();
+      ).bind(`engine invoke failed: ${String(e).slice(0, 200)}`, Date.now(), id).run();
     }),
   );
 

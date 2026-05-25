@@ -1,0 +1,42 @@
+# Fly.io config for the VariantGPT engine.
+#
+# Build context is the repo root (so the Dockerfile can COPY both engine/ and
+# tracks/). Deploy with:
+#
+#   fly deploy --remote-only
+#
+# Fly's remote builder handles the Docker image build — no local Docker daemon
+# required. First deploy: `fly launch --no-deploy --copy-config` to provision
+# the app, then `fly secrets set ENGINE_BEARER=...` before the first `fly deploy`.
+
+app = "variantgpt-engine"
+primary_region = "iad"          # change to closer region (e.g. "bom" for Mumbai)
+
+[build]
+  dockerfile = "engine/Dockerfile"
+
+[env]
+  PORT = "8080"
+  VGPT_DEBUG = "0"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"     # scale-to-zero
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "requests"
+    hard_limit = 5
+    soft_limit = 3
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 1024              # engine peaks ~400MB on demo trio; bump for WGS
+
+# Auth: the Worker passes a shared bearer in Authorization: Bearer <token>.
+# Set as a Fly secret (not in [env]):
+#   fly secrets set ENGINE_BEARER=<long-random-string>

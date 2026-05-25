@@ -55,11 +55,28 @@ from variantgpt_engine.pipeline import run_case  # noqa: E402
 from run_uploaded_case import _build_ped, _ensure_uncompressed_vcf, _find_member  # noqa: E402
 
 
+def _check_bearer(request: Request) -> JSONResponse | None:
+    """Reject requests that don't present the shared bearer token. Set via the
+    ENGINE_BEARER env / Fly secret. Health endpoint is exempt."""
+    expected = os.environ.get("ENGINE_BEARER")
+    if not expected:
+        # No bearer configured — accept all (dev mode). Log a warning.
+        print("[warn] ENGINE_BEARER unset; engine is open. Set it via `fly secrets set`.", flush=True)
+        return None
+    auth = request.headers.get("authorization", "")
+    if not auth.startswith("Bearer ") or auth.removeprefix("Bearer ") != expected:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    return None
+
+
 async def healthz(_: Request) -> JSONResponse:
     return JSONResponse({"ok": True})
 
 
 async def run(request: Request) -> JSONResponse:
+    reject = _check_bearer(request)
+    if reject is not None:
+        return reject
     body = await request.json()
     required = ("case_id", "manifest", "vcf_urls", "case_put_url",
                 "callback_url", "callback_secret")

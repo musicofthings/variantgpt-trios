@@ -7,9 +7,6 @@ import { variantsRouter } from "./routes/variants";
 import { proposalsRouter } from "./routes/proposals";
 import { apiRouter } from "./routes/api";
 
-// Re-export the EngineContainer DO so wrangler can find it via class_name.
-export { EngineContainer } from "./engineContainer";
-
 const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
 app.use("*", logger());
