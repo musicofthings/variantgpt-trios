@@ -205,6 +205,21 @@ async def _execute_job(job: dict[str, Any]) -> None:
             emit(f"merged: {len(joint)} joint variants")
             await post_status("running")
 
+            # GUARD: real WGS produces ~50k-500k joint variants. The engine
+            # currently only has the demo-data annotation source wired (11
+            # curated variants); processing a full WGS run would take hours
+            # AND produce a case.json with ~0% annotated variants. Fail fast
+            # with a clear actionable message instead. Lift this once VEP +
+            # tabix tracks are wired (HANDOVER roadmap #2).
+            MAX_VARIANTS_DEMO_MODE = 5000
+            if len(joint) > MAX_VARIANTS_DEMO_MODE:
+                raise RuntimeError(
+                    f"engine is in demo-annotation mode and received {len(joint)} variants "
+                    f"(cap: {MAX_VARIANTS_DEMO_MODE}). For now, upload the curated demo trio "
+                    f"VCFs from data/test/demo_trio/ (~11 variants). Real WGS support requires "
+                    f"VEP + tabix annotation tracks (roadmap item #2)."
+                )
+
             emit("computing QC")
             qc = await asyncio.to_thread(compute_qc, joint, pedigree)
             emit("QC done")
@@ -217,43 +232,39 @@ async def _execute_job(job: dict[str, Any]) -> None:
                 use_demo_annotations=True,
             )
 
-            emit(f"annotating {len(joint)} variants")
-            variants: list[Variant] = []
-            for i, jv in enumerate(joint):
-                def _ann_one(jv=jv) -> Variant:
+            # Do the entire annotate→classify→priority sweep in a single
+            # worker thread. The previous per-variant await was paying the
+            # full event-loop context-switch cost N times (~50ms each) — at
+            # WGS scale that turns minutes of work into hours.
+            hpo_ids = manifest.get("hpo", [])
+
+            def _annotate_classify_all() -> list[Variant]:
+                out: list[Variant] = []
+                for jv in joint:
                     models, conf = assign_models(jv, pedigree)
                     v = annotate(jv, ctx)
                     v.inheritance_models = models
                     v.inheritance_confidence = conf  # type: ignore[assignment]
-                    return v
-                try:
-                    v = await asyncio.to_thread(_ann_one)
-                except Exception as e:  # noqa: BLE001
-                    emit(f"annotate failed at variant {i} ({jv.chrom}:{jv.pos}): {type(e).__name__}: {e}")
-                    raise
-                variants.append(v)
-            emit("annotation done")
+                    out.append(v)
+                # Compound-het pass needs gene assignment from annotation.
+                addl = compound_het_pass(
+                    [(jv, vv.gene) for jv, vv in zip(joint, out)], pedigree,
+                )
+                for vv, jv in zip(out, joint):
+                    if jv.key in addl:
+                        vv.inheritance_models = list(dict.fromkeys(vv.inheritance_models + addl[jv.key]))
+                for vv in out:
+                    tier, points, ledger = classify(vv)
+                    vv.baseline_tier = tier
+                    vv.baseline_points = points
+                    vv.evidence = ledger
+                    priority(vv, hpo_ids)
+                return out
+
+            emit(f"annotating + classifying {len(joint)} variants")
+            variants: list[Variant] = await asyncio.to_thread(_annotate_classify_all)
+            emit("annotation + classification done")
             await post_status("running")
-
-            emit("compound-het pass")
-            addl = await asyncio.to_thread(
-                compound_het_pass,
-                [(jv, v.gene) for jv, v in zip(joint, variants)],
-                pedigree,
-            )
-            for v, jv in zip(variants, joint):
-                if jv.key in addl:
-                    v.inheritance_models = list(dict.fromkeys(v.inheritance_models + addl[jv.key]))
-
-            emit("classifying")
-            hpo_ids = manifest.get("hpo", [])
-            for v in variants:
-                tier, points, ledger = await asyncio.to_thread(classify, v)
-                v.baseline_tier = tier
-                v.baseline_points = points
-                v.evidence = ledger
-                priority(v, hpo_ids)
-            emit("classification done")
 
             emit("reclassifying (South Asian)")
             proposals = await asyncio.to_thread(
