@@ -1,0 +1,51 @@
+/* VariantGPT design tokens — Frontend Design Spec §2.
+ * Light theme only. Refined-minimal, paper-like. */
+:root {
+  /* Color */
+  --bg: #FAF8F4;
+  --surface: #FFFFFF;
+  --surface-sunken: #F2EFE8;
+  --border: #E4DFD5;
+  --ink: #1C2826;
+  --ink-soft: #5A6360;
+  --primary: #0E6E64;
+  --primary-soft: #D7EAE6;
+  --accent: #B4541E;
+
+  /* ACMG tier semantics (colorblind-safe — never color alone) */
+  --tier-p:   #B3261E;
+  --tier-lp:  #C9662B;
+  --tier-vus: #9A8C66;
+  --tier-lb:  #3A7CA5;
+  --tier-b:   #2F6E54;
+
+  /* Typography */
+  --font-display: "Fraunces", Georgia, serif;
+  --font-body: "Public Sans", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  /* Space / radius / elevation */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --radius-control: 6px;
+  --radius-card: 10px;
+  --shadow-soft: 0 1px 3px rgba(28, 40, 38, 0.06);
+
+  /* Motion */
+  --motion-quick: 150ms ease-out;
+  --motion-base: 200ms ease-out;
+  --motion-reveal: 250ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-quick: 0ms;
+    --motion-base: 0ms;
+    --motion-reveal: 0ms;
+  }
+}

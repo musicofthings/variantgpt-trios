@@ -1,0 +1,2 @@
+# React Router needs all non-asset paths to fall back to index.html.
+/*  /index.html  200

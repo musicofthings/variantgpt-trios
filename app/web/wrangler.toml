@@ -1,0 +1,13 @@
+# Cloudflare Pages config for the SPA build output.
+#
+# Deploy:
+#   cd app/web
+#   VITE_API_BASE="https://variantgpt-api.workers.dev" npm run build
+#   npx wrangler pages deploy dist --project-name=variantgpt-web
+#
+# The /api/* routes are served by the variantgpt-api Worker (separate deploy).
+# This Pages project hosts only the React SPA bundle.
+
+name = "variantgpt-web"
+compatibility_date = "2025-01-01"
+pages_build_output_dir = "./dist"

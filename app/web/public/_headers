@@ -1,0 +1,8 @@
+# SPA caching policy.
+# Hashed assets are immutable; HTML must revalidate so deploys aren't pinned
+# to the user's browser cache.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/*
+  Cache-Control: public, max-age=0, must-revalidate

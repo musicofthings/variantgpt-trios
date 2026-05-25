@@ -1,0 +1,2836 @@
+{
+  "case_id": "demo-trio-001",
+  "build": "GRCh38",
+  "pedigree": {
+    "members": [
+      {
+        "id": "PROBAND_001",
+        "role": "proband",
+        "sex": "male",
+        "affected": "affected",
+        "sample_name": "PROBAND_001",
+        "vcf_path": null
+      },
+      {
+        "id": "FATHER_001",
+        "role": "father",
+        "sex": "male",
+        "affected": "unaffected",
+        "sample_name": "FATHER_001",
+        "vcf_path": null
+      },
+      {
+        "id": "MOTHER_001",
+        "role": "mother",
+        "sex": "female",
+        "affected": "unaffected",
+        "sample_name": "MOTHER_001",
+        "vcf_path": null
+      }
+    ],
+    "consanguinity": false,
+    "relations": [
+      [
+        "FATHER_001",
+        "PROBAND_001",
+        "parent"
+      ],
+      [
+        "MOTHER_001",
+        "PROBAND_001",
+        "parent"
+      ]
+    ]
+  },
+  "hpo": [
+    {
+      "hpo_id": "HP:0001903",
+      "label": null,
+      "source": "manual"
+    },
+    {
+      "hpo_id": "HP:0002240",
+      "label": null,
+      "source": "manual"
+    },
+    {
+      "hpo_id": "HP:0002910",
+      "label": null,
+      "source": "manual"
+    },
+    {
+      "hpo_id": "HP:0003124",
+      "label": null,
+      "source": "manual"
+    }
+  ],
+  "clinical_history": null,
+  "qc": {
+    "per_sample_call_rate": {
+      "PROBAND_001": 1.0,
+      "FATHER_001": 1.0,
+      "MOTHER_001": 1.0
+    },
+    "mean_depth": {
+      "PROBAND_001": 40.36363636363637,
+      "FATHER_001": 39.27272727272727,
+      "MOTHER_001": 39.45454545454545
+    },
+    "titv": {},
+    "mendelian_error_rate": 0.18181818181818182,
+    "sex_check": {
+      "PROBAND_001": "male",
+      "FATHER_001": "male",
+      "MOTHER_001": "female"
+    },
+    "kinship": {},
+    "contamination_flag": {
+      "PROBAND_001": false,
+      "FATHER_001": false,
+      "MOTHER_001": false
+    }
+  },
+  "variants": [
+    {
+      "id": "chr17:43093015:G:A",
+      "chrom": "chr17",
+      "pos": 43093015,
+      "ref": "G",
+      "alt": "A",
+      "gene": "BRCA1",
+      "transcript": "NM_007294.4",
+      "hgvs_c": "c.5266dupC",
+      "hgvs_p": "p.Gln1756Profs*74",
+      "consequence": "frameshift_variant",
+      "inheritance_models": [
+        "unresolved"
+      ],
+      "inheritance_confidence": "low",
+      "populations": [
+        {
+          "source": "gnomad_v4_global",
+          "ac": null,
+          "an": null,
+          "af": 0.0,
+          "n_hom": null,
+          "n_het": null
+        },
+        {
+          "source": "gnomad_v4_sas",
+          "ac": null,
+          "an": null,
+          "af": 0.0,
+          "n_hom": null,
+          "n_het": null
+        },
+        {
+          "source": "indigenomes",
+          "ac": null,
+          "an": null,
+          "af": 0.0,
+          "n_hom": null,
+          "n_het": null
+        }
+      ],
+      "predictors": {
+        "alphamissense": null,
+        "revel": null,
+        "cadd": 35.0,
+        "spliceai": 0.02,
+        "phylop": null,
+        "gerp": null
+      },
+      "evidence": [
+        {
+          "criterion": "PVS1",
+          "fired": true,
+          "strength": "VS",
+          "points": 8,
+          "source": "vep",
+          "detail": "predicted LoF: frameshift_variant"
+        },
+        {
+          "criterion": "PS1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PS2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "trio_phasing",
+          "detail": ""
+        },
+        {
+          "criterion": "PM6",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "trio_phasing",
+          "detail": ""
+        },
+        {
+          "criterion": "PS3",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PS4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM2",
+          "fired": true,
+          "strength": "P",
+          "points": 1,
+          "source": "gnomad_v4_global",
+          "detail": "rare in gnomAD global (AF<0.0001, ENIGMA-aligned)"
+        },
+        {
+          "criterion": "PM3",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM5",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PP1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PP2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PP3",
+          "fired": true,
+          "strength": "P",
+          "points": 1,
+          "source": "predictors",
+          "detail": "CADD=35.0"
+        },
+        {
+          "criterion": "PP4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BA1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS3",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BP2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BP4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BP7",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        }
+      ],
+      "baseline_tier": "P",
+      "baseline_points": 10,
+      "reclass_tier": null,
+      "reclass_points": null,
+      "reclass_delta": null,
+      "priority_score": 0.4
+    },
+    {
+      "id": "chr11:108326180:C:T",
+      "chrom": "chr11",
+      "pos": 108326180,
+      "ref": "C",
+      "alt": "T",
+      "gene": "ATM",
+      "transcript": "NM_000051.4",
+      "hgvs_c": "c.6203C>T",
+      "hgvs_p": "p.Pro2068Leu",
+      "consequence": "missense_variant",
+      "inheritance_models": [
+        "de_novo"
+      ],
+      "inheritance_confidence": "high",
+      "populations": [
+        {
+          "source": "gnomad_v4_global",
+          "ac": null,
+          "an": null,
+          "af": 4e-6,
+          "n_hom": null,
+          "n_het": null
+        },
+        {
+          "source": "gnomad_v4_sas",
+          "ac": null,
+          "an": null,
+          "af": 0.0,
+          "n_hom": null,
+          "n_het": null
+        }
+      ],
+      "predictors": {
+        "alphamissense": 0.91,
+        "revel": 0.84,
+        "cadd": 32.0,
+        "spliceai": 0.01,
+        "phylop": null,
+        "gerp": null
+      },
+      "evidence": [
+        {
+          "criterion": "PVS1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PS1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PS2",
+          "fired": true,
+          "strength": "S",
+          "points": 4,
+          "source": "trio_phasing",
+          "detail": "confirmed de novo (parentage-supported)"
+        },
+        {
+          "criterion": "PM6",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "trio_phasing",
+          "detail": ""
+        },
+        {
+          "criterion": "PS3",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PS4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM2",
+          "fired": true,
+          "strength": "P",
+          "points": 1,
+          "source": "gnomad_v4_global",
+          "detail": "rare in gnomAD global (AF<0.0001, ClinGen-SVI default)"
+        },
+        {
+          "criterion": "PM3",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM5",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PP1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PP2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PP3",
+          "fired": true,
+          "strength": "P",
+          "points": 1,
+          "source": "predictors",
+          "detail": "AM=0.910, REVEL=0.840, CADD=32.0"
+        },
+        {
+          "criterion": "PP4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BA1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS3",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BP2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BP4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BP7",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        }
+      ],
+      "baseline_tier": "LP",
+      "baseline_points": 6,
+      "reclass_tier": null,
+      "reclass_points": null,
+      "reclass_delta": null,
+      "priority_score": 0.6
+    },
+    {
+      "id": "chr2:178562809:G:A",
+      "chrom": "chr2",
+      "pos": 178562809,
+      "ref": "G",
+      "alt": "A",
+      "gene": "TTN",
+      "transcript": "NM_001267550.2",
+      "hgvs_c": "c.41329C>T",
+      "hgvs_p": "p.Arg13777*",
+      "consequence": "stop_gained",
+      "inheritance_models": [
+        "de_novo"
+      ],
+      "inheritance_confidence": "high",
+      "populations": [
+        {
+          "source": "gnomad_v4_global",
+          "ac": null,
+          "an": null,
+          "af": 0.0,
+          "n_hom": null,
+          "n_het": null
+        },
+        {
+          "source": "gnomad_v4_sas",
+          "ac": null,
+          "an": null,
+          "af": 0.0,
+          "n_hom": null,
+          "n_het": null
+        },
+        {
+          "source": "indigenomes",
+          "ac": null,
+          "an": null,
+          "af": 0.0,
+          "n_hom": null,
+          "n_het": null
+        }
+      ],
+      "predictors": {
+        "alphamissense": null,
+        "revel": null,
+        "cadd": 37.0,
+        "spliceai": 0.02,
+        "phylop": null,
+        "gerp": null
+      },
+      "evidence": [
+        {
+          "criterion": "PVS1",
+          "fired": true,
+          "strength": "VS",
+          "points": 8,
+          "source": "vep",
+          "detail": "predicted LoF: stop_gained"
+        },
+        {
+          "criterion": "PS1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PS2",
+          "fired": true,
+          "strength": "S",
+          "points": 4,
+          "source": "trio_phasing",
+          "detail": "confirmed de novo (parentage-supported)"
+        },
+        {
+          "criterion": "PM6",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "trio_phasing",
+          "detail": ""
+        },
+        {
+          "criterion": "PS3",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PS4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM2",
+          "fired": true,
+          "strength": "P",
+          "points": 1,
+          "source": "gnomad_v4_global",
+          "detail": "rare in gnomAD global (AF<0.0001, ClinGen-SVI default)"
+        },
+        {
+          "criterion": "PM3",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM5",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PP1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PP2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PP3",
+          "fired": true,
+          "strength": "P",
+          "points": 1,
+          "source": "predictors",
+          "detail": "CADD=37.0"
+        },
+        {
+          "criterion": "PP4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BA1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS3",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BP2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BP4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BP7",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        }
+      ],
+      "baseline_tier": "P",
+      "baseline_points": 14,
+      "reclass_tier": null,
+      "reclass_points": null,
+      "reclass_delta": null,
+      "priority_score": 0.6
+    },
+    {
+      "id": "chr11:5226774:A:T",
+      "chrom": "chr11",
+      "pos": 5226774,
+      "ref": "A",
+      "alt": "T",
+      "gene": "HBB",
+      "transcript": "NM_000518.5",
+      "hgvs_c": "c.20A>T",
+      "hgvs_p": "p.Glu7Val",
+      "consequence": "missense_variant",
+      "inheritance_models": [
+        "ar_hom"
+      ],
+      "inheritance_confidence": "high",
+      "populations": [
+        {
+          "source": "gnomad_v4_global",
+          "ac": null,
+          "an": null,
+          "af": 0.0027,
+          "n_hom": null,
+          "n_het": null
+        },
+        {
+          "source": "gnomad_v4_sas",
+          "ac": null,
+          "an": null,
+          "af": 0.0019,
+          "n_hom": null,
+          "n_het": null
+        },
+        {
+          "source": "indigenomes",
+          "ac": null,
+          "an": null,
+          "af": 0.0048,
+          "n_hom": null,
+          "n_het": null
+        },
+        {
+          "source": "genomeasia",
+          "ac": null,
+          "an": null,
+          "af": 0.0031,
+          "n_hom": null,
+          "n_het": null
+        }
+      ],
+      "predictors": {
+        "alphamissense": 0.42,
+        "revel": 0.71,
+        "cadd": 22.5,
+        "spliceai": 0.0,
+        "phylop": null,
+        "gerp": null
+      },
+      "evidence": [
+        {
+          "criterion": "PVS1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PS1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PS2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "trio_phasing",
+          "detail": ""
+        },
+        {
+          "criterion": "PM6",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "trio_phasing",
+          "detail": ""
+        },
+        {
+          "criterion": "PS3",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PS4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "gnomad_v4_global",
+          "detail": ""
+        },
+        {
+          "criterion": "PM3",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM5",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PP1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PP2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PP3",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PP4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BA1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS3",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BP2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BP4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BP7",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        }
+      ],
+      "baseline_tier": "VUS",
+      "baseline_points": 0,
+      "reclass_tier": null,
+      "reclass_points": null,
+      "reclass_delta": null,
+      "priority_score": 0.0
+    },
+    {
+      "id": "chr11:5226778:T:A",
+      "chrom": "chr11",
+      "pos": 5226778,
+      "ref": "T",
+      "alt": "A",
+      "gene": "HBB",
+      "transcript": "NM_000518.5",
+      "hgvs_c": "c.79G>A",
+      "hgvs_p": "p.Glu27Lys",
+      "consequence": "missense_variant",
+      "inheritance_models": [
+        "ar_hom"
+      ],
+      "inheritance_confidence": "high",
+      "populations": [
+        {
+          "source": "gnomad_v4_global",
+          "ac": null,
+          "an": null,
+          "af": 0.0028,
+          "n_hom": null,
+          "n_het": null
+        },
+        {
+          "source": "gnomad_v4_sas",
+          "ac": null,
+          "an": null,
+          "af": 0.0193,
+          "n_hom": null,
+          "n_het": null
+        },
+        {
+          "source": "indigenomes",
+          "ac": null,
+          "an": null,
+          "af": 0.0212,
+          "n_hom": null,
+          "n_het": null
+        },
+        {
+          "source": "genomeasia",
+          "ac": null,
+          "an": null,
+          "af": 0.0185,
+          "n_hom": null,
+          "n_het": null
+        }
+      ],
+      "predictors": {
+        "alphamissense": 0.31,
+        "revel": 0.45,
+        "cadd": 18.7,
+        "spliceai": 0.0,
+        "phylop": null,
+        "gerp": null
+      },
+      "evidence": [
+        {
+          "criterion": "PVS1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PS1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PS2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "trio_phasing",
+          "detail": ""
+        },
+        {
+          "criterion": "PM6",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "trio_phasing",
+          "detail": ""
+        },
+        {
+          "criterion": "PS3",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PS4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "gnomad_v4_global",
+          "detail": ""
+        },
+        {
+          "criterion": "PM3",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM5",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PP1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PP2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PP3",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PP4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BA1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS3",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BP2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BP4",
+          "fired": true,
+          "strength": "BP",
+          "points": -1,
+          "source": "predictors",
+          "detail": "AM=0.31 REVEL=0.45 (benign band)"
+        },
+        {
+          "criterion": "BP7",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        }
+      ],
+      "baseline_tier": "LB",
+      "baseline_points": -1,
+      "reclass_tier": null,
+      "reclass_points": null,
+      "reclass_delta": null,
+      "priority_score": 0.0
+    },
+    {
+      "id": "chr16:3293310:G:A",
+      "chrom": "chr16",
+      "pos": 3293310,
+      "ref": "G",
+      "alt": "A",
+      "gene": "MEFV",
+      "transcript": "NM_000243.3",
+      "hgvs_c": "c.2080A>G",
+      "hgvs_p": "p.Met694Val",
+      "consequence": "missense_variant",
+      "inheritance_models": [
+        "ar_hom"
+      ],
+      "inheritance_confidence": "high",
+      "populations": [
+        {
+          "source": "gnomad_v4_global",
+          "ac": null,
+          "an": null,
+          "af": 0.0021,
+          "n_hom": null,
+          "n_het": null
+        },
+        {
+          "source": "gnomad_v4_sas",
+          "ac": null,
+          "an": null,
+          "af": 0.0009,
+          "n_hom": null,
+          "n_het": null
+        },
+        {
+          "source": "indigenomes",
+          "ac": null,
+          "an": null,
+          "af": 0.0124,
+          "n_hom": null,
+          "n_het": null
+        },
+        {
+          "source": "genomeasia",
+          "ac": null,
+          "an": null,
+          "af": 0.0067,
+          "n_hom": null,
+          "n_het": null
+        }
+      ],
+      "predictors": {
+        "alphamissense": 0.55,
+        "revel": 0.62,
+        "cadd": 24.0,
+        "spliceai": 0.0,
+        "phylop": null,
+        "gerp": null
+      },
+      "evidence": [
+        {
+          "criterion": "PVS1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PS1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PS2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "trio_phasing",
+          "detail": ""
+        },
+        {
+          "criterion": "PM6",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "trio_phasing",
+          "detail": ""
+        },
+        {
+          "criterion": "PS3",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PS4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "gnomad_v4_global",
+          "detail": ""
+        },
+        {
+          "criterion": "PM3",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM5",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PP1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PP2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PP3",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PP4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BA1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS3",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BP2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BP4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BP7",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        }
+      ],
+      "baseline_tier": "VUS",
+      "baseline_points": 0,
+      "reclass_tier": "LB",
+      "reclass_points": -4,
+      "reclass_delta": -4,
+      "priority_score": 0.0
+    },
+    {
+      "id": "chrX:154535443:C:T",
+      "chrom": "chrX",
+      "pos": 154535443,
+      "ref": "C",
+      "alt": "T",
+      "gene": "G6PD",
+      "transcript": "NM_001042351.3",
+      "hgvs_c": "c.563C>T",
+      "hgvs_p": "p.Ser188Phe",
+      "consequence": "missense_variant",
+      "inheritance_models": [
+        "x_linked_recessive"
+      ],
+      "inheritance_confidence": "high",
+      "populations": [
+        {
+          "source": "gnomad_v4_global",
+          "ac": null,
+          "an": null,
+          "af": 0.0009,
+          "n_hom": null,
+          "n_het": null
+        },
+        {
+          "source": "gnomad_v4_sas",
+          "ac": null,
+          "an": null,
+          "af": 0.0058,
+          "n_hom": null,
+          "n_het": null
+        },
+        {
+          "source": "indigenomes",
+          "ac": null,
+          "an": null,
+          "af": 0.0091,
+          "n_hom": null,
+          "n_het": null
+        },
+        {
+          "source": "genomeasia",
+          "ac": null,
+          "an": null,
+          "af": 0.0037,
+          "n_hom": null,
+          "n_het": null
+        }
+      ],
+      "predictors": {
+        "alphamissense": 0.71,
+        "revel": 0.78,
+        "cadd": 27.0,
+        "spliceai": 0.0,
+        "phylop": null,
+        "gerp": null
+      },
+      "evidence": [
+        {
+          "criterion": "PVS1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PS1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PS2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "trio_phasing",
+          "detail": ""
+        },
+        {
+          "criterion": "PM6",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "trio_phasing",
+          "detail": ""
+        },
+        {
+          "criterion": "PS3",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PS4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "gnomad_v4_global",
+          "detail": ""
+        },
+        {
+          "criterion": "PM3",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM5",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PP1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PP2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PP3",
+          "fired": true,
+          "strength": "P",
+          "points": 1,
+          "source": "predictors",
+          "detail": "AM=0.710, REVEL=0.780, CADD=27.0"
+        },
+        {
+          "criterion": "PP4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BA1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS3",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BP2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BP4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BP7",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        }
+      ],
+      "baseline_tier": "VUS",
+      "baseline_points": 1,
+      "reclass_tier": null,
+      "reclass_points": null,
+      "reclass_delta": null,
+      "priority_score": 0.25
+    },
+    {
+      "id": "chr7:117559590:ATCT:A",
+      "chrom": "chr7",
+      "pos": 117559590,
+      "ref": "ATCT",
+      "alt": "A",
+      "gene": "CFTR",
+      "transcript": "NM_000492.4",
+      "hgvs_c": "c.1521_1523delCTT",
+      "hgvs_p": "p.Phe508del",
+      "consequence": "inframe_deletion",
+      "inheritance_models": [
+        "unresolved",
+        "comp_het"
+      ],
+      "inheritance_confidence": "low",
+      "populations": [
+        {
+          "source": "gnomad_v4_global",
+          "ac": null,
+          "an": null,
+          "af": 0.0067,
+          "n_hom": null,
+          "n_het": null
+        },
+        {
+          "source": "gnomad_v4_sas",
+          "ac": null,
+          "an": null,
+          "af": 0.0011,
+          "n_hom": null,
+          "n_het": null
+        },
+        {
+          "source": "indigenomes",
+          "ac": null,
+          "an": null,
+          "af": 0.0008,
+          "n_hom": null,
+          "n_het": null
+        }
+      ],
+      "predictors": {
+        "alphamissense": null,
+        "revel": null,
+        "cadd": 22.0,
+        "spliceai": 0.01,
+        "phylop": null,
+        "gerp": null
+      },
+      "evidence": [
+        {
+          "criterion": "PVS1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PS1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PS2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "trio_phasing",
+          "detail": ""
+        },
+        {
+          "criterion": "PM6",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "trio_phasing",
+          "detail": ""
+        },
+        {
+          "criterion": "PS3",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PS4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "gnomad_v4_global",
+          "detail": ""
+        },
+        {
+          "criterion": "PM3",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM5",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PP1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PP2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PP3",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PP4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BA1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS3",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BP2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BP4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BP7",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        }
+      ],
+      "baseline_tier": "VUS",
+      "baseline_points": 0,
+      "reclass_tier": null,
+      "reclass_points": null,
+      "reclass_delta": null,
+      "priority_score": 0.2
+    },
+    {
+      "id": "chr7:117548795:G:T",
+      "chrom": "chr7",
+      "pos": 117548795,
+      "ref": "G",
+      "alt": "T",
+      "gene": "CFTR",
+      "transcript": "NM_000492.4",
+      "hgvs_c": "c.1624G>T",
+      "hgvs_p": "p.Gly542*",
+      "consequence": "stop_gained",
+      "inheritance_models": [
+        "unresolved",
+        "comp_het"
+      ],
+      "inheritance_confidence": "low",
+      "populations": [
+        {
+          "source": "gnomad_v4_global",
+          "ac": null,
+          "an": null,
+          "af": 0.0001,
+          "n_hom": null,
+          "n_het": null
+        },
+        {
+          "source": "gnomad_v4_sas",
+          "ac": null,
+          "an": null,
+          "af": 0.0,
+          "n_hom": null,
+          "n_het": null
+        },
+        {
+          "source": "indigenomes",
+          "ac": null,
+          "an": null,
+          "af": 0.0,
+          "n_hom": null,
+          "n_het": null
+        }
+      ],
+      "predictors": {
+        "alphamissense": null,
+        "revel": null,
+        "cadd": 38.0,
+        "spliceai": 0.02,
+        "phylop": null,
+        "gerp": null
+      },
+      "evidence": [
+        {
+          "criterion": "PVS1",
+          "fired": true,
+          "strength": "VS",
+          "points": 8,
+          "source": "vep",
+          "detail": "predicted LoF: stop_gained"
+        },
+        {
+          "criterion": "PS1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PS2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "trio_phasing",
+          "detail": ""
+        },
+        {
+          "criterion": "PM6",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "trio_phasing",
+          "detail": ""
+        },
+        {
+          "criterion": "PS3",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PS4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "gnomad_v4_global",
+          "detail": ""
+        },
+        {
+          "criterion": "PM3",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM5",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PP1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PP2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PP3",
+          "fired": true,
+          "strength": "P",
+          "points": 1,
+          "source": "predictors",
+          "detail": "CADD=38.0"
+        },
+        {
+          "criterion": "PP4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BA1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS3",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BP2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BP4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BP7",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        }
+      ],
+      "baseline_tier": "LP",
+      "baseline_points": 9,
+      "reclass_tier": null,
+      "reclass_points": null,
+      "reclass_delta": null,
+      "priority_score": 0.6
+    },
+    {
+      "id": "chr13:20189547:C:T",
+      "chrom": "chr13",
+      "pos": 20189547,
+      "ref": "C",
+      "alt": "T",
+      "gene": "GJB2",
+      "transcript": "NM_004004.6",
+      "hgvs_c": "c.35delG",
+      "hgvs_p": "p.Gly12Valfs*2",
+      "consequence": "frameshift_variant",
+      "inheritance_models": [
+        "unresolved"
+      ],
+      "inheritance_confidence": "low",
+      "populations": [
+        {
+          "source": "gnomad_v4_global",
+          "ac": null,
+          "an": null,
+          "af": 0.0098,
+          "n_hom": null,
+          "n_het": null
+        },
+        {
+          "source": "gnomad_v4_sas",
+          "ac": null,
+          "an": null,
+          "af": 0.0034,
+          "n_hom": null,
+          "n_het": null
+        },
+        {
+          "source": "indigenomes",
+          "ac": null,
+          "an": null,
+          "af": 0.0026,
+          "n_hom": null,
+          "n_het": null
+        }
+      ],
+      "predictors": {
+        "alphamissense": null,
+        "revel": null,
+        "cadd": 33.0,
+        "spliceai": 0.0,
+        "phylop": null,
+        "gerp": null
+      },
+      "evidence": [
+        {
+          "criterion": "PVS1",
+          "fired": true,
+          "strength": "VS",
+          "points": 8,
+          "source": "vep",
+          "detail": "predicted LoF: frameshift_variant"
+        },
+        {
+          "criterion": "PS1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PS2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "trio_phasing",
+          "detail": ""
+        },
+        {
+          "criterion": "PM6",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "trio_phasing",
+          "detail": ""
+        },
+        {
+          "criterion": "PS3",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PS4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "gnomad_v4_global",
+          "detail": ""
+        },
+        {
+          "criterion": "PM3",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM5",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PP1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PP2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PP3",
+          "fired": true,
+          "strength": "P",
+          "points": 1,
+          "source": "predictors",
+          "detail": "CADD=33.0"
+        },
+        {
+          "criterion": "PP4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BA1",
+          "fired": true,
+          "strength": "BA",
+          "points": 0,
+          "source": "gnomad_v4_global",
+          "detail": "AF=0.0098 in gnomAD global > BA1 0.005 (Hearing Loss VCEP)"
+        },
+        {
+          "criterion": "BS1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS3",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BP2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BP4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BP7",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        }
+      ],
+      "baseline_tier": "B",
+      "baseline_points": 9,
+      "reclass_tier": null,
+      "reclass_points": null,
+      "reclass_delta": null,
+      "priority_score": 0.25
+    },
+    {
+      "id": "chr1:985266:C:T",
+      "chrom": "chr1",
+      "pos": 985266,
+      "ref": "C",
+      "alt": "T",
+      "gene": "AGRN",
+      "transcript": "NM_198576.4",
+      "hgvs_c": "c.5125C>T",
+      "hgvs_p": "p.Arg1709Cys",
+      "consequence": "missense_variant",
+      "inheritance_models": [
+        "unresolved"
+      ],
+      "inheritance_confidence": "low",
+      "populations": [
+        {
+          "source": "gnomad_v4_global",
+          "ac": null,
+          "an": null,
+          "af": 0.21,
+          "n_hom": null,
+          "n_het": null
+        },
+        {
+          "source": "gnomad_v4_sas",
+          "ac": null,
+          "an": null,
+          "af": 0.18,
+          "n_hom": null,
+          "n_het": null
+        },
+        {
+          "source": "indigenomes",
+          "ac": null,
+          "an": null,
+          "af": 0.2,
+          "n_hom": null,
+          "n_het": null
+        }
+      ],
+      "predictors": {
+        "alphamissense": 0.05,
+        "revel": 0.09,
+        "cadd": 12.0,
+        "spliceai": 0.0,
+        "phylop": null,
+        "gerp": null
+      },
+      "evidence": [
+        {
+          "criterion": "PVS1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PS1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PS2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "trio_phasing",
+          "detail": ""
+        },
+        {
+          "criterion": "PM6",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "trio_phasing",
+          "detail": ""
+        },
+        {
+          "criterion": "PS3",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PS4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "gnomad_v4_global",
+          "detail": ""
+        },
+        {
+          "criterion": "PM3",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PM5",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PP1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PP2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PP3",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "PP4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BA1",
+          "fired": true,
+          "strength": "BA",
+          "points": 0,
+          "source": "gnomad_v4_global",
+          "detail": "AF=0.2100 in gnomAD global > BA1 0.05 (ClinGen-SVI default)"
+        },
+        {
+          "criterion": "BS1",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS3",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BS4",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BP2",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        },
+        {
+          "criterion": "BP4",
+          "fired": true,
+          "strength": "BP",
+          "points": -1,
+          "source": "predictors",
+          "detail": "AM=0.05 REVEL=0.09 (benign band)"
+        },
+        {
+          "criterion": "BP7",
+          "fired": false,
+          "strength": null,
+          "points": 0,
+          "source": "",
+          "detail": ""
+        }
+      ],
+      "baseline_tier": "B",
+      "baseline_points": -1,
+      "reclass_tier": null,
+      "reclass_points": null,
+      "reclass_delta": null,
+      "priority_score": 0.0
+    }
+  ],
+  "proposals": [
+    {
+      "variant_id": "chr16:3293310:G:A",
+      "from_tier": "VUS",
+      "to_tier": "LB",
+      "changed_criteria": [
+        {
+          "criterion": "BS1",
+          "fired": true,
+          "strength": "BS",
+          "points": -4,
+          "source": "indigenomes",
+          "detail": "AF=0.0124 > BS1 0.01 (ClinGen-SVI default, South Asian baseline)"
+        }
+      ],
+      "af_evidence": [
+        {
+          "source": "gnomad_v4_sas",
+          "ac": null,
+          "an": null,
+          "af": 0.0009,
+          "n_hom": null,
+          "n_het": null
+        },
+        {
+          "source": "indigenomes",
+          "ac": null,
+          "an": null,
+          "af": 0.0124,
+          "n_hom": null,
+          "n_het": null
+        },
+        {
+          "source": "genomeasia",
+          "ac": null,
+          "an": null,
+          "af": 0.0067,
+          "n_hom": null,
+          "n_het": null
+        }
+      ],
+      "snapshot_versions": {
+        "engine": "0.1.0",
+        "demo_dataset": "v1"
+      },
+      "status": "pending"
+    }
+  ],
+  "lift_failed": [],
+  "versions": {
+    "engine": "0.1.0",
+    "demo_dataset": "v1"
+  }
+}

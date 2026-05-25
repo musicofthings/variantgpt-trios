@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pip install --quiet pydantic)",
+      "Bash(python -c \"import sys; sys.path.insert\\(0, 'src'\\); from variantgpt_engine.acmg.engine import tier_for; print\\('boundary:', tier_for\\(10\\), tier_for\\(9\\), tier_for\\(0\\), tier_for\\(-7\\)\\)\")"
+    ]
+  }
+}

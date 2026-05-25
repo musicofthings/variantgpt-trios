@@ -1,0 +1,21 @@
+##fileformat=VCFv4.2
+##fileDate=2026-05-23
+##source=variantgpt_demo
+##reference=GRCh38
+##INFO=<ID=GENE,Number=1,Type=String,Description="Gene symbol (demo)">
+##INFO=<ID=NOTE,Number=1,Type=String,Description="Demo note">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##FORMAT=<ID=DP,Number=1,Type=Integer,Description="Read depth">
+##FORMAT=<ID=AD,Number=R,Type=Integer,Description="Allelic depth">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	PROBAND_001
+chr17	43093015	clinvar_17661	G	A	60	PASS	GENE=BRCA1;NOTE=Ashkenazi_founder_frameshift__here_we_use_it_as_a_dominant_inherited_fixture.	GT:DP:AD	0/1:40:20,20
+chr11	108326180	clinvar_142146	C	T	60	PASS	GENE=ATM;NOTE=Missense_de_novo_in_tumor-suppressor__PVS1_doesn't_fire_(missense),_PS2+PM2+PP3_	GT:DP:AD	0/1:40:20,20
+chr2	178562809	.	G	A	60	PASS	GENE=TTN;NOTE=De_novo_LoF_in_cardiomyopathy_gene__PVS1_(Strong,_predicted_NMD).	GT:DP:AD	0/1:40:20,20
+chr11	5226774	clinvar_15333	A	T	60	PASS	GENE=HBB;NOTE=HbS_(sickle)__curator_sees_BS1_won't_fire_(AF_below_threshold_for_HBB)_—_sanity_	GT:DP:AD	1/1:42:0,42
+chr11	5226778	clinvar_15126	T	A	60	PASS	GENE=HBB;NOTE=HbE_—_very_common_in_South/SE_Asians_(~2%_IndiGenomes)._Baseline_calls_VUS__recl	GT:DP:AD	1/1:42:0,42
+chr16	3293310	clinvar_2552	G	A	60	PASS	GENE=MEFV;NOTE=MEFV_M694V_—_common_in_several_Mediterranean/South-Asian_groups__IndiGenomes_1.2	GT:DP:AD	1/1:42:0,42
+chrX	154535443	clinvar_10384	C	T	60	PASS	GENE=G6PD;NOTE=G6PD_Mediterranean_—_common_in_South_Asians__X-linked_recessive_in_the_male_prob	GT:DP:AD	1:40:20,20
+chr7	117559590	clinvar_7105	ATCT	A	60	PASS	GENE=CFTR;NOTE=ΔF508__comp_het_with_the_G542X_partner_below.	GT:DP:AD	0/1:40:20,20
+chr7	117548795	clinvar_7113	G	T	60	PASS	GENE=CFTR;NOTE=CFTR_G542X_stop-gain__trans_with_ΔF508_→_comp_het_in_the_proband.	GT:DP:AD	0/1:40:20,20
+chr13	20189547	clinvar_17004	C	T	60	PASS	GENE=GJB2;NOTE=Both_parents_heterozygous_carriers_in_a_recessive_deafness_gene_—_Family_Carrier	GT:DP:AD	0/0:38:38,0
+chr1	985266	clinvar_135808	C	T	60	PASS	GENE=AGRN;NOTE=Common_polymorphism_—_BA1_fires_(AF_>>_5%).	GT:DP:AD	0/1:40:20,20

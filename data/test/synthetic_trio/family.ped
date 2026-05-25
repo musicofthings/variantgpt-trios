@@ -1,0 +1,5 @@
+# Synthetic trio for unit testing inheritance models.
+# fam  iid       pat     mat     sex  affected
+FAM1   proband   father  mother  1    2
+FAM1   father    0       0       1    1
+FAM1   mother    0       0       2    1

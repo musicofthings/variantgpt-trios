@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+
+# Node
+node_modules/
+.wrangler/
+.dev.vars
+.dev.vars.*
+*.log
+.vite/
+dist/
+
+# Fly.io
+.fly/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Runtime artifacts (user uploads + per-case engine output)
+data/uploads/
+data/cases/
+data/raw/
+app/web/public/cases/
+tracks/cache/
+
+# Genomic data — never commit real patient data.
+# Demo VCFs (data/test/demo_trio/*.vcf) are explicitly re-included below.
+*.vcf
+*.vcf.gz
+*.vcf.gz.tbi
+*.bam
+*.cram
+!data/test/demo_trio/*.vcf
+
+# Reports
+*.pdf
+!docs/**/*.pdf
+
+# Env
+.env
+.env.local
+.env.*
+!.env.example
