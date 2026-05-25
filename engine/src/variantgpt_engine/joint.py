@@ -18,9 +18,10 @@ class JointVariant:
     ref: str
     alt: str
     genotypes: dict[str, Optional[int]] = field(default_factory=dict)  # member_id -> 0/1/2/None
-    depths: dict[str, Optional[int]] = field(default_factory=dict)
-    allele_balance: dict[str, Optional[float]] = field(default_factory=dict)
-    filters: dict[str, str] = field(default_factory=dict)
+    depths: dict[str, Optional[int]] = field(default_factory=dict)      # FORMAT/DP
+    gq: dict[str, Optional[int]] = field(default_factory=dict)          # FORMAT/GQ (genotype quality)
+    allele_balance: dict[str, Optional[float]] = field(default_factory=dict)  # alt / total from FORMAT/AD
+    filters: dict[str, str] = field(default_factory=dict)               # FILTER field (PASS-not stored)
 
     # VEP CSQ — one dict per transcript annotation, keys from the CSQ format
     # header (Allele, Consequence, IMPACT, SYMBOL, Gene, Feature, HGVSc, HGVSp,
@@ -73,6 +74,20 @@ def merge(member_vcfs: dict[str, Path]) -> list[JointVariant]:
                 jv.genotypes[member_id] = _gt_alt_count(gt)
                 if rec.gt_depths is not None and len(rec.gt_depths):
                     jv.depths[member_id] = int(rec.gt_depths[0])
+                # GQ (genotype quality) — cyvcf2 exposes as gt_quals.
+                try:
+                    if rec.gt_quals is not None and len(rec.gt_quals):
+                        jv.gq[member_id] = int(rec.gt_quals[0])
+                except Exception:  # noqa: BLE001
+                    pass
+                # Allele balance from gt_ref_depths/gt_alt_depths.
+                try:
+                    rd = int(rec.gt_ref_depths[0]) if rec.gt_ref_depths is not None and len(rec.gt_ref_depths) else None
+                    ad_alt = int(rec.gt_alt_depths[0]) if rec.gt_alt_depths is not None and len(rec.gt_alt_depths) else None
+                    if rd is not None and ad_alt is not None and (rd + ad_alt) > 0:
+                        jv.allele_balance[member_id] = ad_alt / (rd + ad_alt)
+                except Exception:  # noqa: BLE001
+                    pass
                 if rec.FILTER:
                     jv.filters[member_id] = str(rec.FILTER)
                 if csq_per_alt and not jv.csq:
@@ -117,10 +132,11 @@ def _merge_pure_python(member_vcfs: dict[str, Path]) -> list[JointVariant]:
                 format_idx = {k: i for i, k in enumerate(fmt_keys)}
                 gt_str = fmt_vals[format_idx.get("GT", 0)] if fmt_vals else "./."
                 gt = _parse_gt(gt_str)
-                try:
-                    dp_val = int(fmt_vals[format_idx["DP"]]) if "DP" in format_idx else None
-                except (ValueError, IndexError):
-                    dp_val = None
+                dp_val = _int_field(fmt_vals, format_idx, "DP")
+                gq_val = _int_field(fmt_vals, format_idx, "GQ")
+                # AD = comma-separated allele depths (ref, alt1, alt2, ...). For
+                # the single-alt case AB = AD[1] / (AD[0] + AD[1]).
+                ad_str = fmt_vals[format_idx["AD"]] if "AD" in format_idx and format_idx["AD"] < len(fmt_vals) else ""
 
                 info_kv = _parse_info(info)
                 csq_per_alt: dict[str, list[dict[str, str]]] = {}
@@ -138,6 +154,11 @@ def _merge_pure_python(member_vcfs: dict[str, Path]) -> list[JointVariant]:
                     jv.genotypes[member_id] = _alt_count_for(gt_str, alt_idx + 1) if "," in alt else gt
                     if dp_val is not None:
                         jv.depths[member_id] = dp_val
+                    if gq_val is not None:
+                        jv.gq[member_id] = gq_val
+                    ab = _ab_from_ad(ad_str, alt_idx + 1)
+                    if ab is not None:
+                        jv.allele_balance[member_id] = ab
                     if filt and filt != "PASS":
                         jv.filters[member_id] = filt
                     if csq_per_alt:
@@ -243,3 +264,36 @@ def _parse_gt(gt: str) -> Optional[int]:
 def _gt_alt_count(cyvcf2_gt: int) -> Optional[int]:
     # cyvcf2.gt_types: 0=HOM_REF, 1=HET, 2=UNKNOWN, 3=HOM_ALT
     return {0: 0, 1: 1, 3: 2}.get(cyvcf2_gt)
+
+
+def _int_field(fmt_vals: list[str], format_idx: dict[str, int], key: str) -> Optional[int]:
+    """Best-effort int extraction from a FORMAT/SAMPLE column."""
+    if key not in format_idx:
+        return None
+    i = format_idx[key]
+    if i >= len(fmt_vals):
+        return None
+    raw = fmt_vals[i]
+    if not raw or raw == ".":
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def _ab_from_ad(ad_str: str, target_alt_idx: int) -> Optional[float]:
+    """Allele balance = AD[alt] / sum(AD). target_alt_idx is 1-based into the
+    AD array (AD[0] is the ref). Returns None when AD is missing or unparseable."""
+    if not ad_str or ad_str == ".":
+        return None
+    try:
+        ad = [int(x) for x in ad_str.split(",") if x not in (".", "")]
+    except ValueError:
+        return None
+    if target_alt_idx >= len(ad):
+        return None
+    total = sum(ad)
+    if total == 0:
+        return None
+    return ad[target_alt_idx] / total

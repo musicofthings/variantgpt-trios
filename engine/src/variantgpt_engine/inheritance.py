@@ -1,7 +1,24 @@
-"""Inheritance model assignment (PRD §4.3).
+"""Inheritance model assignment + GATK-style trio QC (PRD §4.3).
 
 Generalized to any pedigree shape — never trio-locked. For each joint variant,
 emit the set of consistent inheritance models and a confidence flag.
+
+De novo confidence gates (matches GATK Best Practices + ClinGen SVI WG):
+
+  HIGH (qualifies for PS2 Strong = +4 points)
+    - Proband het OR hom-alt with GQ ≥ 30, DP ≥ 20, AB 0.3-0.7 (het) or ≥ 0.85 (hom)
+    - Both parents 0/0 with GQ ≥ 30, DP ≥ 20, AB ≤ 0.05 (no alt reads)
+    - Parent-child kinship not contradicted (we don't have BAM, so assumed)
+
+  MEDIUM (PM6 Moderate = +2 points)
+    - Duo: one parent unavailable, the other is 0/0 with above QC
+    - OR trio but with marginal QC (GQ 20-30 OR DP 10-20 in any sample)
+
+  LOW (not fired)
+    - Any sample GQ < 20 or DP < 10
+    - Proband het with AB outside 0.2-0.8 (likely call artifact)
+    - Parent 0/0 but >5% alt reads (possible mosaic — flag for human review,
+      do not auto-promote)
 
 Compound het requires a *gene-aware* second pass with parental phasing; that
 runs in `compound_het_pass` after annotation has assigned a gene per variant.
@@ -13,6 +30,80 @@ from typing import Iterable, Optional
 
 from .joint import JointVariant
 from .models import Affected, InheritanceModel, Pedigree, Sex
+
+
+# QC thresholds — class-level constants so the values are documented in one
+# place and easy to tune. Defaults align with GATK Best Practices.
+DENOVO_QC_HIGH = {"gq": 30, "dp": 20}
+DENOVO_QC_MEDIUM = {"gq": 20, "dp": 10}
+HET_AB_MIN = 0.20            # proband het: AB must be in [0.20, 0.80] for call validity
+HET_AB_MAX = 0.80
+HET_AB_TIGHT_MIN = 0.30      # tighter range for HIGH-confidence de novo
+HET_AB_TIGHT_MAX = 0.70
+HOM_AB_MIN = 0.85            # hom-alt should have AB ≥ 0.85
+PARENT_REF_AB_MAX = 0.05     # parent 0/0 should have ≤ 5% alt reads (anything more = mosaic suspect)
+
+
+def _qc_grade_denovo_proband(jv: JointVariant, proband_id: str) -> str:
+    """Return 'high', 'medium', 'low', or 'fail' for the proband's call quality
+    in the context of a de novo claim."""
+    gt = jv.genotypes.get(proband_id)
+    if gt is None or gt == 0:
+        return "fail"
+    dp = jv.depths.get(proband_id)
+    gq = jv.gq.get(proband_id)
+    ab = jv.allele_balance.get(proband_id)
+    # Hard floors: missing or terrible quality → fail.
+    if (dp is not None and dp < DENOVO_QC_MEDIUM["dp"]) or (gq is not None and gq < DENOVO_QC_MEDIUM["gq"]):
+        return "low"
+    if gt == 1:
+        # Het: AB must be plausibly balanced.
+        if ab is not None and (ab < HET_AB_MIN or ab > HET_AB_MAX):
+            return "low"
+        if (dp is None or dp >= DENOVO_QC_HIGH["dp"]) and (gq is None or gq >= DENOVO_QC_HIGH["gq"]):
+            if ab is None or (HET_AB_TIGHT_MIN <= ab <= HET_AB_TIGHT_MAX):
+                return "high"
+        return "medium"
+    if gt == 2:
+        if ab is not None and ab < HOM_AB_MIN:
+            return "low"
+        if (dp is None or dp >= DENOVO_QC_HIGH["dp"]) and (gq is None or gq >= DENOVO_QC_HIGH["gq"]):
+            return "high"
+        return "medium"
+    return "low"
+
+
+def _qc_grade_denovo_parent(jv: JointVariant, parent_id: str) -> str:
+    """Return 'high', 'medium', 'low', or 'absent' for a parent's 0/0 call
+    quality. Parents must be confidently homozygous reference for de novo."""
+    gt = jv.genotypes.get(parent_id)
+    if gt is None:
+        return "absent"        # parent not in call set at this site
+    if gt != 0:
+        return "low"           # parent isn't 0/0 → not a de novo
+    dp = jv.depths.get(parent_id)
+    gq = jv.gq.get(parent_id)
+    ab = jv.allele_balance.get(parent_id)
+    if (dp is not None and dp < DENOVO_QC_MEDIUM["dp"]) or (gq is not None and gq < DENOVO_QC_MEDIUM["gq"]):
+        return "low"
+    if ab is not None and ab > PARENT_REF_AB_MAX:
+        # Parent has alt reads at this site — possible mosaicism. Don't promote.
+        return "low"
+    if (dp is None or dp >= DENOVO_QC_HIGH["dp"]) and (gq is None or gq >= DENOVO_QC_HIGH["gq"]):
+        return "high"
+    return "medium"
+
+
+def _combined_denovo_confidence(grades: list[str]) -> str:
+    """Combine per-sample grades into an overall de novo confidence."""
+    if "low" in grades or "fail" in grades:
+        return "low"
+    if "absent" in grades:
+        # Duo: one parent missing. Can never exceed medium.
+        return "medium" if "high" in grades or "medium" in grades else "low"
+    if all(g == "high" for g in grades):
+        return "high"
+    return "medium"
 
 
 def assign_models(
@@ -39,21 +130,29 @@ def assign_models(
         fa_gt = variant.genotypes.get(fa) if fa else None
         mo_gt = variant.genotypes.get(mo) if mo else None
 
-        # De novo (PRD §4.3, §7 PS2/PM6).
-        # Strict (parentage confirmed): alt in proband, ref in BOTH parents at adequate depth.
-        # Assumed (parentage unconfirmed): the one parent we have is 0/0 — fires PM6 (Moderate)
-        #   rather than PS2 (Strong) via the confidence='medium' downgrade in acmg/criteria.py.
-        # When neither parent has a VCF, we can't infer de novo at all.
+        # De novo (PRD §4.3, §7 PS2/PM6) — GATK-style QC-gated.
+        #
+        # Required:
+        #   - Proband: het or hom-alt with passing call quality (see _qc_grade_denovo_proband)
+        #   - At least one parent confidently 0/0
+        #   - The other parent must be 0/0 OR absent (duo)
+        #   - No parent can be het+ (would be Mendelian-consistent inheritance, not de novo)
         if gt >= 1:
-            parents_present = [p for p in (fa, mo) if p and p in variant.genotypes]
-            if len(parents_present) == 2 and fa_gt == 0 and mo_gt == 0:
-                models.append("de_novo")
-                if (variant.depths.get(fa) or 0) < 10 or (variant.depths.get(mo) or 0) < 10:
-                    confidence = "low"
-            elif len(parents_present) == 1 and all(variant.genotypes.get(p) == 0 for p in parents_present):
-                # Duo: one parent confirmed 0/0; the other unknown. PM6 territory.
-                models.append("de_novo")
-                confidence = "medium"
+            proband_grade = _qc_grade_denovo_proband(variant, proband_id)
+            if proband_grade in ("high", "medium"):
+                fa_grade = _qc_grade_denovo_parent(variant, fa) if fa else "absent"
+                mo_grade = _qc_grade_denovo_parent(variant, mo) if mo else "absent"
+                # Both parents must be 0/0 with at least 'medium' QC, OR one is
+                # 0/0+medium and the other is absent (duo de novo).
+                ref_grades = [g for g in (fa_grade, mo_grade) if g in ("high", "medium")]
+                absent_count = sum(1 for g in (fa_grade, mo_grade) if g == "absent")
+                if len(ref_grades) + absent_count == 2 and len(ref_grades) >= 1:
+                    models.append("de_novo")
+                    confidence = _combined_denovo_confidence([proband_grade] + ref_grades + ["absent"] * absent_count)
+                else:
+                    # Either parent failed QC OR has variant — not a confident de novo claim.
+                    # We still don't list it. (Hint: PM6 won't fire either.)
+                    pass
 
         # AR homozygous: hom-alt in affected; parents het (when present).
         if gt == 2:
