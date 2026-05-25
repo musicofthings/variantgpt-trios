@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Pedigree } from "../components/Pedigree";
 import { FileDropzone, type StagedFile } from "../components/FileDropzone";
 import { RunMonitor, useJobStatus } from "../components/RunMonitor";
+import { HpoSearch, type HpoHit } from "../components/HpoSearch";
 import { DEFAULT_TRIO, type PedigreeState } from "../types-pedigree";
 import { autoMapSample, sniffFile } from "../vcfSniff";
 import { api } from "../apiBase";
@@ -77,6 +78,10 @@ export function Intake() {
       setHpo([...hpo, { id: v, label: HPO_LABEL[v], confirmed: true }]);
     }
     setHpoInput("");
+  }
+  function addFromSearch(hit: HpoHit) {
+    if (hpo.some((h) => h.id === hit.id)) return;
+    setHpo([...hpo, { id: hit.id, label: hit.label, confirmed: true }]);
   }
 
   // Sniff a staged file in the background — extracts sample names from VCF header.
@@ -273,8 +278,19 @@ export function Intake() {
           <section id="sec-hpo" className="card" style={{ marginBottom: 24 }}>
             <h3>2. Phenotype (HPO)</h3>
             <p style={{ color: "var(--ink-soft)", marginTop: 4 }}>
-              At least one HPO term required. LLM-suggested terms appear as dashed chips after you save history.
+              At least one HPO term required. Search by phenotype name or HP id, or paste a known id below.
+              History-derived suggestions appear as dashed chips.
             </p>
+
+            {/* Typeahead — primary input. Hits Worker /api/hpo/search → EBI OLS4. */}
+            <div style={{ marginTop: 12 }}>
+              <HpoSearch
+                excludeIds={hpo.map((h) => h.id)}
+                onPick={addFromSearch}
+                placeholder='Search HPO — e.g. "seizure", "microcephaly", or "HP:0001250"'
+              />
+            </div>
+
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12, minHeight: 32 }}>
               {hpo.map((h) => (
                 <span key={h.id} className="hpo-chip confirmed">
@@ -291,20 +307,27 @@ export function Intake() {
                 </span>
               ))}
             </div>
-            <form
-              style={{ marginTop: 12, display: "flex", gap: 8 }}
-              onSubmit={(e) => { e.preventDefault(); addHpoManual(); }}
-            >
-              <input
-                value={hpoInput}
-                onChange={(e) => setHpoInput(e.target.value)}
-                placeholder="HP:0001250"
-                className="mono"
-                style={{ flex: 1 }}
-                aria-label="Add HPO term by ID"
-              />
-              <button>Add</button>
-            </form>
+
+            {/* Escape hatch: advanced users who already know an HP id can paste it. */}
+            <details style={{ marginTop: 12 }}>
+              <summary style={{ cursor: "pointer", fontSize: 12, color: "var(--ink-soft)" }}>
+                Add by HP id
+              </summary>
+              <form
+                style={{ marginTop: 8, display: "flex", gap: 8 }}
+                onSubmit={(e) => { e.preventDefault(); addHpoManual(); }}
+              >
+                <input
+                  value={hpoInput}
+                  onChange={(e) => setHpoInput(e.target.value)}
+                  placeholder="HP:0001250"
+                  className="mono"
+                  style={{ flex: 1 }}
+                  aria-label="Add HPO term by ID"
+                />
+                <button>Add</button>
+              </form>
+            </details>
           </section>
 
           <section id="sec-history" className="card" style={{ marginBottom: 24 }}>

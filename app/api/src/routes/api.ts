@@ -64,6 +64,82 @@ function pickExt(filename: string | undefined): string | null {
 // ───────────────────────── routes ─────────────────────────
 
 /**
+ * GET /api/hpo/search?q=<text>&limit=<n>
+ * → { results: [{ id: "HP:0001250", label: "Seizure", definition?, synonyms? }] }
+ *
+ * Proxies the EBI OLS4 ontology search so the SPA never talks to a
+ * third-party domain. Results cached at the Worker edge for 1h — HPO
+ * doesn't change often and popular queries are highly repeat.
+ *
+ * Accepts either label text ("seiz") or a partial HP id ("HP:00012").
+ */
+apiRouter.get("/hpo/search", async (c) => {
+  const q = (c.req.query("q") ?? "").trim();
+  const limit = Math.min(parseInt(c.req.query("limit") ?? "10", 10) || 10, 25);
+  if (q.length < 2) return c.json({ results: [] });
+
+  // Cache key is the full request URL — Cloudflare cache picks this up via
+  // the standard Cache API. 1h TTL is the right tradeoff for an ontology.
+  const cacheKey = new Request(
+    `https://hpo-cache.variantgpt/${encodeURIComponent(q)}/${limit}`,
+    { method: "GET" },
+  );
+  const cache = caches.default;
+  const cached = await cache.match(cacheKey);
+  if (cached) return cached;
+
+  // OLS supports two query modes — the user might type "HP:0001250" or
+  // "seizure". The /search endpoint covers both (id match by exact, label
+  // by fuzzy/prefix).
+  const olsUrl = new URL("https://www.ebi.ac.uk/ols4/api/search");
+  olsUrl.searchParams.set("q", q);
+  olsUrl.searchParams.set("ontology", "hp");
+  olsUrl.searchParams.set("rows", String(limit));
+  olsUrl.searchParams.set("fieldList", "obo_id,label,description,synonym,iri");
+  olsUrl.searchParams.set("queryFields", "obo_id,label,synonym");
+
+  let upstream: Response;
+  try {
+    upstream = await fetch(olsUrl.toString(), {
+      headers: { accept: "application/json" },
+      cf: { cacheTtl: 3600, cacheEverything: true },
+    });
+  } catch (e) {
+    return c.json({ results: [], error: `ols unreachable: ${String(e).slice(0, 100)}` }, 502);
+  }
+  if (!upstream.ok) {
+    return c.json({ results: [], error: `ols ${upstream.status}` }, 502);
+  }
+
+  const data: {
+    response?: {
+      docs?: Array<{
+        obo_id?: string;
+        label?: string;
+        description?: string[];
+        synonym?: string[];
+        iri?: string;
+      }>;
+    };
+  } = await upstream.json();
+
+  const results = (data.response?.docs ?? [])
+    .filter((d) => d.obo_id?.startsWith("HP:"))
+    .map((d) => ({
+      id: d.obo_id!,
+      label: d.label ?? "",
+      definition: d.description?.[0],
+      synonyms: d.synonym?.slice(0, 3),
+    }));
+
+  const res = c.json({ results });
+  // Clone the response into the edge cache. Must set s-maxage for Cache API.
+  res.headers.set("cache-control", "public, s-maxage=3600");
+  c.executionCtx.waitUntil(cache.put(cacheKey, res.clone()));
+  return res;
+});
+
+/**
  * GET /api/cases/:id/upload-url/:role?filename=foo.vcf.gz
  * → { url, key, expiresIn }
  *
