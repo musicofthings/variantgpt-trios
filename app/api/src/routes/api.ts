@@ -80,8 +80,10 @@ apiRouter.get("/hpo/search", async (c) => {
 
   // Cache key is the full request URL — Cloudflare cache picks this up via
   // the standard Cache API. 1h TTL is the right tradeoff for an ontology.
+  // The version segment is bumped whenever the upstream-call or response
+  // shape changes — old responses cached at the edge are immediately stale.
   const cacheKey = new Request(
-    `https://hpo-cache.variantgpt/${encodeURIComponent(q)}/${limit}`,
+    `https://hpo-cache.variantgpt/v2/${encodeURIComponent(q)}/${limit}`,
     { method: "GET" },
   );
   const cache = caches.default;
