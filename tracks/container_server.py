@@ -53,7 +53,7 @@ sys.path.insert(0, str(THIS.parents[1] / "engine" / "src"))
 from variantgpt_engine.pedigree import load_ped  # noqa: E402
 from variantgpt_engine.acmg import classify  # noqa: E402
 from variantgpt_engine.annotation import AnnotationContext, annotate  # noqa: E402
-from variantgpt_engine.annotation_sources import vep_rest  # noqa: E402
+from variantgpt_engine.annotation_sources import myvariant, vep_rest  # noqa: E402
 from variantgpt_engine.annotation_sources.csq import pick_canonical  # noqa: E402
 from variantgpt_engine.build_detect import detect_build  # noqa: E402
 from variantgpt_engine.filter import filter_candidates  # noqa: E402
@@ -306,6 +306,16 @@ async def _execute_job(job: dict[str, Any]) -> None:
             variants: list[Variant] = await asyncio.to_thread(_annotate_classify_all)
             emit("annotation + classification done")
             await post_status("running")
+
+            # ClinVar + dbNSFP overlay via myvariant.info — batched, one POST
+            # per 1000 variants. Real-mode only (demo path uses curated data).
+            if real_mode and variants:
+                emit(f"myvariant.info: ClinVar + dbNSFP for {len(variants)} variants")
+                pairs = list(zip(joint, variants))
+                filled = await asyncio.to_thread(myvariant.annotate_variants, pairs)
+                clinvar_count = sum(1 for v in variants if v.clinvar)
+                emit(f"myvariant.info: filled={filled} clinvar_records={clinvar_count}")
+                await post_status("running")
 
             emit("reclassifying (South Asian)")
             proposals = await asyncio.to_thread(

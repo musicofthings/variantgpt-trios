@@ -66,6 +66,16 @@ export interface ReclassProposal {
   criteria: string[];
 }
 
+export interface ClinVarRecord {
+  rcv_count?: number;
+  clinical_significance?: string;
+  review_status?: string;
+  review_stars?: number;       // 0-4 stars
+  last_evaluated?: string;
+  conditions?: string[];
+  variation_id?: string;
+}
+
 export interface VariantRow {
   id: string;
   gene?: string;
@@ -83,4 +93,5 @@ export interface VariantRow {
   evidence?: EvidenceRow[];
   populations?: PopulationAF[];
   predictors?: Predictors;
+  clinvar?: ClinVarRecord | null;
 }

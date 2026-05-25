@@ -140,6 +140,7 @@
         "phylop": null,
         "gerp": null
       },
+      "clinvar": null,
       "evidence": [
         {
           "criterion": "PVS1",
@@ -374,6 +375,7 @@
         "phylop": null,
         "gerp": null
       },
+      "clinvar": null,
       "evidence": [
         {
           "criterion": "PVS1",
@@ -616,6 +618,7 @@
         "phylop": null,
         "gerp": null
       },
+      "clinvar": null,
       "evidence": [
         {
           "criterion": "PVS1",
@@ -866,6 +869,7 @@
         "phylop": null,
         "gerp": null
       },
+      "clinvar": null,
       "evidence": [
         {
           "criterion": "PVS1",
@@ -1116,6 +1120,7 @@
         "phylop": null,
         "gerp": null
       },
+      "clinvar": null,
       "evidence": [
         {
           "criterion": "PVS1",
@@ -1366,6 +1371,7 @@
         "phylop": null,
         "gerp": null
       },
+      "clinvar": null,
       "evidence": [
         {
           "criterion": "PVS1",
@@ -1616,6 +1622,7 @@
         "phylop": null,
         "gerp": null
       },
+      "clinvar": null,
       "evidence": [
         {
           "criterion": "PVS1",
@@ -1859,6 +1866,7 @@
         "phylop": null,
         "gerp": null
       },
+      "clinvar": null,
       "evidence": [
         {
           "criterion": "PVS1",
@@ -1934,11 +1942,11 @@
         },
         {
           "criterion": "PM4",
-          "fired": false,
-          "strength": null,
-          "points": 0,
-          "source": "",
-          "detail": ""
+          "fired": true,
+          "strength": "M",
+          "points": 2,
+          "source": "vep",
+          "detail": "inframe_deletion — protein length altered"
         },
         {
           "criterion": "PM5",
@@ -2046,7 +2054,7 @@
         }
       ],
       "baseline_tier": "VUS",
-      "baseline_points": 0,
+      "baseline_points": 2,
       "reclass_tier": null,
       "reclass_points": null,
       "reclass_delta": null,
@@ -2102,6 +2110,7 @@
         "phylop": null,
         "gerp": null
       },
+      "clinvar": null,
       "evidence": [
         {
           "criterion": "PVS1",
@@ -2344,6 +2353,7 @@
         "phylop": null,
         "gerp": null
       },
+      "clinvar": null,
       "evidence": [
         {
           "criterion": "PVS1",
@@ -2586,6 +2596,7 @@
         "phylop": null,
         "gerp": null
       },
+      "clinvar": null,
       "evidence": [
         {
           "criterion": "PVS1",

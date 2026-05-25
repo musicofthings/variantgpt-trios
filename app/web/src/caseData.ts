@@ -47,6 +47,15 @@ interface EngineVariant {
     cadd?: number | null;
     spliceai?: number | null;
   };
+  clinvar?: {
+    rcv_count?: number | null;
+    clinical_significance?: string | null;
+    review_status?: string | null;
+    review_stars?: number | null;
+    last_evaluated?: string | null;
+    conditions?: string[] | null;
+    variation_id?: string | null;
+  } | null;
   evidence: { criterion: string; fired: boolean; strength?: string | null; points: number; source: string; detail: string }[];
   baseline_tier?: Tier | null;
   baseline_points: number;
@@ -142,6 +151,15 @@ function adaptVariant(ev: EngineVariant, proposal?: EngineProposal): VariantRow 
       cadd: ev.predictors.cadd ?? undefined,
       spliceai: ev.predictors.spliceai ?? undefined,
     } as Predictors,
+    clinvar: ev.clinvar ? {
+      rcv_count: ev.clinvar.rcv_count ?? undefined,
+      clinical_significance: ev.clinvar.clinical_significance ?? undefined,
+      review_status: ev.clinvar.review_status ?? undefined,
+      review_stars: ev.clinvar.review_stars ?? undefined,
+      last_evaluated: ev.clinvar.last_evaluated ?? undefined,
+      conditions: ev.clinvar.conditions ?? undefined,
+      variation_id: ev.clinvar.variation_id ?? undefined,
+    } : null,
   };
 }
 

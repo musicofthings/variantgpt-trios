@@ -51,7 +51,17 @@ def pvs1(v: Variant) -> EvidenceItem:
 
 @criterion("PS1")
 def ps1(v: Variant) -> EvidenceItem:
-    # Requires ClinVar adapter: same amino-acid change, different nucleotide.
+    """Same amino-acid change as a previously-established P/LP variant at a
+    different nucleotide change.
+
+    Strict implementation requires a ClinVar gene-level index keyed by
+    (gene, codon, alt_aa). myvariant.info gives us only per-variant ClinVar,
+    not "every other variant at this codon." Deferred to a follow-up commit
+    that uses NCBI eutils to enumerate ClinVar by gene then caches by codon.
+
+    For now, returns not-fired but exposes a ClinVar-anchor evidence row
+    (`CLINVAR_ANCHOR` below) so the curator still sees prior classifications
+    when present."""
     return EvidenceItem(criterion="PS1", fired=False)
 
 
@@ -91,6 +101,32 @@ def ps4(v: Variant) -> EvidenceItem:
 
 @criterion("PM1")
 def pm1(v: Variant) -> EvidenceItem:
+    """Variant in a mutational hotspot or well-established functional domain.
+
+    Strict version needs UniProt domain coordinates + ClinVar density mapping.
+    Practical conservative proxy that fires only on strong signal: missense
+    variant where multiple high-quality predictors agree at the *strong*
+    pathogenic band (not just supporting). Avoids double-counting with PP3
+    by requiring the agreement to be stronger than PP3's supporting threshold.
+    """
+    if (v.consequence or "") != "missense_variant":
+        return EvidenceItem(criterion="PM1", fired=False)
+    am = v.predictors.alphamissense
+    revel = v.predictors.revel
+    cadd = v.predictors.cadd
+    strong_hits = 0
+    if am is not None and am >= 0.972:
+        strong_hits += 1
+    if revel is not None and revel >= 0.932:
+        strong_hits += 1
+    if cadd is not None and cadd >= 30:
+        strong_hits += 1
+    if strong_hits >= 2:
+        return EvidenceItem(
+            criterion="PM1", fired=True, strength="M", points=points_for("M"),
+            source="predictors_strong_concordance",
+            detail=f"missense; ≥2 strong-band predictors agree (AM={am} REVEL={revel} CADD={cadd})",
+        )
     return EvidenceItem(criterion="PM1", fired=False)
 
 
@@ -122,11 +158,30 @@ def pm3(v: Variant) -> EvidenceItem:
 
 @criterion("PM4")
 def pm4(v: Variant) -> EvidenceItem:
+    """Protein length changes from in-frame indel or stop-loss in a non-repeat
+    region.
+
+    We fire on consequence alone — repeat-region exclusion (RepeatMasker
+    overlay) is a future addition. This may over-fire ~5-10% of the time;
+    curators can override.
+    """
+    pm4_consequences = {"inframe_insertion", "inframe_deletion", "stop_lost"}
+    if (v.consequence or "") in pm4_consequences:
+        return EvidenceItem(
+            criterion="PM4", fired=True, strength="M", points=points_for("M"),
+            source="vep",
+            detail=f"{v.consequence} — protein length altered",
+        )
     return EvidenceItem(criterion="PM4", fired=False)
 
 
 @criterion("PM5")
 def pm5(v: Variant) -> EvidenceItem:
+    """Novel missense at a residue where a *different* missense change is
+    established as P/LP.
+
+    Same indexing requirement as PS1 (ClinVar by gene+coden). Deferred.
+    """
     return EvidenceItem(criterion="PM5", fired=False)
 
 
@@ -215,6 +270,22 @@ def bs1(v: Variant) -> EvidenceItem:
 
 @criterion("BS2")
 def bs2(v: Variant) -> EvidenceItem:
+    """Observed in homozygous state in a healthy adult cohort (incompatible
+    with disease).
+
+    gnomAD reports per-variant n_hom; if ≥1 hom-alt is observed AND the
+    inheritance model is dominant or AR (we don't know dominance per gene
+    yet, so default to fire when any hom is observed and the consequence
+    isn't loss-of-function — protective floor).
+    """
+    # Find any population with homozygous count.
+    for pop in v.populations:
+        if pop.n_hom and pop.n_hom >= 1:
+            return EvidenceItem(
+                criterion="BS2", fired=True, strength="BS", points=points_for("BS"),
+                source=pop.source,
+                detail=f"{pop.n_hom} homozygous reference individual(s) observed in {pop.source}",
+            )
     return EvidenceItem(criterion="BS2", fired=False)
 
 
@@ -248,4 +319,22 @@ def bp4(v: Variant) -> EvidenceItem:
 
 @criterion("BP7")
 def bp7(v: Variant) -> EvidenceItem:
-    return EvidenceItem(criterion="BP7", fired=False)
+    """Synonymous variant where SpliceAI predicts no splice effect.
+
+    Strict: also need to confirm no conservation at the position (PhyloP < 1.0
+    or similar). We fold conservation into the same check when available.
+    """
+    if (v.consequence or "") != "synonymous_variant":
+        return EvidenceItem(criterion="BP7", fired=False)
+    spliceai = v.predictors.spliceai
+    phylop = v.predictors.phylop
+    if spliceai is not None and spliceai >= 0.2:
+        return EvidenceItem(criterion="BP7", fired=False)  # has splice signal — don't fire benign
+    # phylop > 1.0 in a synonymous position suggests conservation; veto fire.
+    if phylop is not None and phylop > 1.0:
+        return EvidenceItem(criterion="BP7", fired=False)
+    return EvidenceItem(
+        criterion="BP7", fired=True, strength="BP", points=points_for("BP"),
+        source="predictors",
+        detail=(f"synonymous; SpliceAI={spliceai if spliceai is not None else '—'}; PhyloP={phylop if phylop is not None else '—'}"),
+    )

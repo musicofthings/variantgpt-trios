@@ -113,6 +113,17 @@ class EvidenceItem(BaseModel):
 Tier = Literal["P", "LP", "VUS", "LB", "B"]
 
 
+class ClinVarRecord(BaseModel):
+    """ClinVar classification overlay for a single variant."""
+    rcv_count: Optional[int] = None                    # number of submitter records
+    clinical_significance: Optional[str] = None        # "Pathogenic", "Benign", "Conflicting interpretations of pathogenicity", ...
+    review_status: Optional[str] = None                # "criteria provided, single submitter" | "...multiple submitters, no conflicts" | "reviewed by expert panel" | "practice guideline"
+    review_stars: Optional[int] = None                 # derived 0-4 stars from review_status (4=practice guideline, 3=expert panel, 2=multi no conflict, 1=single, 0=other)
+    last_evaluated: Optional[str] = None               # ISO date if any
+    conditions: list[str] = Field(default_factory=list)
+    variation_id: Optional[str] = None                 # ClinVar Variation accession (e.g. "VCV000017604")
+
+
 class Variant(BaseModel):
     id: str
     chrom: str
@@ -128,6 +139,7 @@ class Variant(BaseModel):
     inheritance_confidence: Literal["high", "medium", "low"] = "medium"
     populations: list[PopulationAF] = Field(default_factory=list)
     predictors: PredictorScores = Field(default_factory=PredictorScores)
+    clinvar: Optional[ClinVarRecord] = None
     evidence: list[EvidenceItem] = Field(default_factory=list)
     baseline_tier: Optional[Tier] = None
     baseline_points: int = 0
