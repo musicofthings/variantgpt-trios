@@ -84,19 +84,18 @@ apiRouter.get("/cases/:id/upload-url/:role", async (c) => {
   const key = `cases/${id}/uploads/${role}.${ext}`;
   const url = await signR2(c.env, "variantgpt", key, "PUT", 3600);
 
-  // Record the slot so /api/cases lists in-progress cases even before /run.
+  // The case row MUST exist before the uploads row — uploads.case_id has a
+  // FOREIGN KEY into cases(id). Order matters; don't reorder these.
+  await c.env.DB.prepare(
+    `INSERT INTO cases (id, name, status) VALUES (?, ?, 'draft')
+     ON CONFLICT(id) DO NOTHING`,
+  ).bind(id, `Case ${id}`).run();
   await c.env.DB.prepare(
     `INSERT INTO uploads (case_id, role, r2_key, filename, uploaded_at)
      VALUES (?, ?, ?, ?, ?)
      ON CONFLICT(case_id, role) DO UPDATE SET
        r2_key=excluded.r2_key, filename=excluded.filename, uploaded_at=excluded.uploaded_at`,
   ).bind(id, role, key, filename ?? null, Date.now()).run();
-
-  // Ensure the case row exists so foreign keys hold.
-  await c.env.DB.prepare(
-    `INSERT INTO cases (id, name, status) VALUES (?, ?, 'draft')
-     ON CONFLICT(id) DO NOTHING`,
-  ).bind(id, `Case ${id}`).run();
 
   return c.json({ url, key, expiresIn: 3600, role, filename: filename ?? null });
 });
