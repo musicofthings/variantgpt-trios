@@ -33,10 +33,12 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
-          if flyctl apps list --json | grep -q '"Name":"variantgpt-engine"'; then
+          if flyctl apps list --json | grep -qi '"name": *"variantgpt-engine"'; then
             echo "App variantgpt-engine already exists"
           else
-            flyctl apps create variantgpt-engine
+            flyctl apps create variantgpt-engine || \
+              flyctl apps list --json | grep -qi '"name": *"variantgpt-engine"' || \
+              { echo "create failed and app still missing"; exit 1; }
           fi
 
       # Push ENGINE_BEARER as a Fly secret on every run so a rotation in GitHub
