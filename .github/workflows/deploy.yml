@@ -78,7 +78,7 @@ jobs:
     needs: api
     defaults: { run: { working-directory: app/web } }
     env:
-      VITE_API_BASE: https://variantgpt-api.musicofthings.workers.dev
+      VITE_API_BASE: https://variantgpt-api.shibi-kannan.workers.dev
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

@@ -24,7 +24,7 @@ OPENROUTER_MODEL_HPO = "anthropic/claude-3.5-haiku"
 
 # Public base URL of this Worker — the engine POSTs status updates here.
 # Updated after the first `wrangler deploy` outputs the workers.dev URL.
-PUBLIC_API_BASE = "https://variantgpt-api.workers.dev"
+PUBLIC_API_BASE = "https://variantgpt-api.shibi-kannan.workers.dev"
 
 # Fly.io-hosted engine endpoint. Updated after `fly deploy` provisions the app.
 ENGINE_BASE_URL = "https://variantgpt-engine.fly.dev"
