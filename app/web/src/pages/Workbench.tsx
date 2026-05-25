@@ -7,6 +7,7 @@ import { PredictorGauges } from "../components/PredictorGauges";
 import { RunMonitor, useJobStatus } from "../components/RunMonitor";
 import { useParams } from "react-router-dom";
 import { useDemoCase } from "../caseData";
+import { api } from "../apiBase";
 import type { InheritanceModel, VariantRow } from "../types";
 
 const TABS: { label: string; match: (v: VariantRow) => boolean }[] = [
@@ -127,12 +128,19 @@ export function Workbench() {
           <h1>{caseName}</h1>
           <span className="pill mono">{caseId}</span>
           <span className="pill">{job?.status ?? "checking…"}</span>
+          {/* Re-run uses the existing R2 uploads + persisted manifest — no
+              re-upload needed when the user wants to iterate on engine logic. */}
+          {(job?.status === "error" || job?.status === "ready") && caseId ? (
+            <RerunButton caseId={caseId} />
+          ) : null}
         </div>
         <RunMonitor caseId={caseId!} status={job} showOpenLink={false} />
         {job?.status === "error" ? (
           <p style={{ marginTop: 12, color: "var(--ink-soft)", fontSize: 13 }}>
             Engine failed. Inspect the log above; common causes are unreadable VCF format,
-            missing FORMAT/GT field, or unsupported multi-sample records.
+            missing FORMAT/GT field, or unsupported multi-sample records. Use{" "}
+            <strong>Re-run analysis</strong> to retry with the same uploads after the
+            engine is updated — no re-upload needed.
           </p>
         ) : null}
       </>
@@ -145,6 +153,7 @@ export function Workbench() {
         <h1>{caseName}</h1>
         <span className="pill mono">GRCh38</span>
         <span className="pill">{loading ? "Loading…" : error ? "Demo unavailable" : "Ready"}</span>
+        {isUploadedCase && caseId ? <RerunButton caseId={caseId} /> : null}
         <button className="primary">Generate report</button>
       </div>
 
@@ -414,4 +423,33 @@ function fmt(v?: number | null): string {
   if (v === 0) return "0";
   if (v < 1e-4) return v.toExponential(1);
   return v.toFixed(4);
+}
+
+/** "Re-run analysis" button. Posts /api/cases/:id/rerun, which fetches the
+ * stored manifest and re-invokes the engine without requiring re-upload. */
+function RerunButton({ caseId }: { caseId: string }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  async function fire() {
+    if (!confirm(`Re-run analysis on ${caseId}?\nUses the same uploads + pedigree from the previous run.`)) return;
+    setBusy(true); setErr(null);
+    try {
+      const r = await fetch(api(`/cases/${caseId}/rerun`), { method: "POST" });
+      const j: { ok?: boolean; status?: string; error?: string } = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok) throw new Error(j.error ?? `status ${r.status}`);
+      // The /status poller picks up from here. Reload to surface the RunMonitor.
+      window.location.reload();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+      setBusy(false);
+    }
+  }
+  return (
+    <>
+      <button onClick={fire} disabled={busy} title="Re-run engine on existing uploads (no re-upload)">
+        {busy ? "Triggering…" : "Re-run analysis"}
+      </button>
+      {err ? <span style={{ color: "var(--rust, #b04a2a)", fontSize: 12 }}>{err}</span> : null}
+    </>
+  );
 }

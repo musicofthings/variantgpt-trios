@@ -39,6 +39,22 @@ export function Dashboard() {
     }
   }
 
+  async function rerunCase(caseId: string) {
+    if (!confirm(`Re-run analysis on ${caseId}?\nUses the same uploads from the previous run — no re-upload needed.`)) return;
+    setBusy(caseId); setError(null); setNotice(null);
+    try {
+      const r = await fetch(api(`/cases/${caseId}/rerun`), { method: "POST" });
+      const j: { ok?: boolean; status?: string; error?: string } = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok) throw new Error(j.error ?? `status ${r.status}`);
+      setNotice(`Re-running ${caseId}…`);
+      setRefreshTick((t) => t + 1);
+    } catch (e) {
+      setError(`Re-run failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function cleanupOrphaned() {
     if (!confirm("Sweep failed runs and orphaned runs (running >30 min)?\nThis deletes their R2 uploads and DB rows.")) return;
     setBusy("cleanup"); setError(null); setNotice(null);
@@ -191,7 +207,16 @@ export function Dashboard() {
                   <td className="num">{c.memberCount ?? "—"}</td>
                   <td className="num">{c.fileCount ?? "—"}</td>
                   <td>{c.finishedAt ? fmtTime(c.finishedAt) : c.hasResult ? "—" : "—"}</td>
-                  <td>
+                  <td style={{ display: "flex", gap: 6 }}>
+                    {(c.status === "error" || c.status === "ready") ? (
+                      <button
+                        onClick={() => rerunCase(c.caseId)}
+                        disabled={busy === c.caseId}
+                        title="Re-run engine on existing uploads"
+                      >
+                        {busy === c.caseId ? "…" : "Re-run"}
+                      </button>
+                    ) : null}
                     <button
                       onClick={() => deleteCase(c.caseId, c.caseId)}
                       disabled={busy === c.caseId}

@@ -177,24 +177,22 @@ apiRouter.get("/cases/:id/upload-url/:role", async (c) => {
   return c.json({ url, key, expiresIn: 3600, role, filename: filename ?? null });
 });
 
-/**
- * POST /api/cases/:id/run     body = manifest JSON (same shape as dev API)
- * → 202 { ok, caseId, status }
- *
- * Side effects: insert/update jobs row, mint signed R2 GET URLs for each
- * uploaded VCF + a PUT URL for the case.json, then invoke the container.
- */
-apiRouter.post("/cases/:id/run", async (c) => {
-  const id = sanitize(c.req.param("id"));
-  if (!id) return c.json({ error: "bad caseId" }, 400);
-  const manifest = await c.req.json<{
-    pedigree: { id: string; role: string; sex: string; affected: boolean; missing?: boolean; sample_name?: string }[];
-    consanguineous?: boolean;
-    hpo?: string[];
-    history?: string;
-    files: Record<string, string>;
-  }>();
+/** Shape of the manifest the SPA sends and we persist in jobs.manifest_json. */
+interface CaseManifest {
+  pedigree: { id: string; role: string; sex: string; affected: boolean; missing?: boolean; sample_name?: string }[];
+  consanguineous?: boolean;
+  hpo?: string[];
+  history?: string;
+  files: Record<string, string>;
+}
 
+/** Shared engine-kickoff path used by both /run (first time) and /rerun
+ * (after a failed/completed run). Returns the same 202 shape. */
+async function kickEngineRun(
+  c: import("hono").Context<{ Bindings: Bindings; Variables: Variables }>,
+  id: string,
+  manifest: CaseManifest,
+) {
   // Confirm uploads exist before kicking off — keeps the engine from running on
   // a half-populated case.
   const uploads = await c.env.DB.prepare(
@@ -206,6 +204,15 @@ apiRouter.post("/cases/:id/run", async (c) => {
       return c.json({ error: `no uploaded VCF found for role=${role}` }, 400);
     }
   }
+  return _continueRun(c, id, manifest, byRole);
+}
+
+async function _continueRun(
+  c: import("hono").Context<{ Bindings: Bindings; Variables: Variables }>,
+  id: string,
+  manifest: CaseManifest,
+  byRole: Map<string, string>,
+) {
 
   // Mint signed URLs for the container.
   const vcfUrls: Record<string, string> = {};
@@ -259,6 +266,66 @@ apiRouter.post("/cases/:id/run", async (c) => {
   );
 
   return c.json({ ok: true, caseId: id, status: "queued" }, 202);
+}
+
+/**
+ * POST /api/cases/:id/run     body = manifest JSON
+ * → 202 { ok, caseId, status }
+ *
+ * First-time run. Validates uploads exist for every role in manifest.files,
+ * persists the manifest in jobs.manifest_json, kicks off the engine.
+ */
+apiRouter.post("/cases/:id/run", async (c) => {
+  const id = sanitize(c.req.param("id"));
+  if (!id) return c.json({ error: "bad caseId" }, 400);
+  const manifest = await c.req.json<CaseManifest>();
+  return kickEngineRun(c, id, manifest);
+});
+
+/**
+ * POST /api/cases/:id/rerun
+ * → 202 { ok, caseId, status }
+ *
+ * Re-trigger using the last submitted manifest (stored in jobs.manifest_json
+ * from the previous /run). No body needed; uses the existing R2 uploads.
+ * Lets the user iterate on the engine without re-uploading multi-GB VCFs
+ * every time a run fails or they want to try with new engine logic.
+ */
+apiRouter.post("/cases/:id/rerun", async (c) => {
+  const id = sanitize(c.req.param("id"));
+  if (!id) return c.json({ error: "bad caseId" }, 400);
+  const row = await c.env.DB.prepare(
+    `SELECT manifest_json FROM jobs WHERE case_id = ?`,
+  ).bind(id).first<{ manifest_json: string | null }>();
+  if (!row?.manifest_json) {
+    return c.json({ error: "no prior manifest — POST to /run first with full payload" }, 404);
+  }
+  let manifest: CaseManifest;
+  try {
+    manifest = JSON.parse(row.manifest_json) as CaseManifest;
+  } catch {
+    return c.json({ error: "stored manifest is malformed" }, 500);
+  }
+  return kickEngineRun(c, id, manifest);
+});
+
+/**
+ * GET /api/cases/:id/manifest
+ * → the persisted manifest (pedigree + HPO + file list). Used by Workbench
+ *   to show what's on file and gate the Re-run button.
+ */
+apiRouter.get("/cases/:id/manifest", async (c) => {
+  const id = sanitize(c.req.param("id"));
+  if (!id) return c.json({ error: "bad caseId" }, 400);
+  const row = await c.env.DB.prepare(
+    `SELECT manifest_json FROM jobs WHERE case_id = ?`,
+  ).bind(id).first<{ manifest_json: string | null }>();
+  if (!row?.manifest_json) return c.json({ error: "not found" }, 404);
+  try {
+    return c.json(JSON.parse(row.manifest_json));
+  } catch {
+    return c.json({ error: "malformed manifest" }, 500);
+  }
 });
 
 /**
