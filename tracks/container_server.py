@@ -26,7 +26,6 @@ Callbacks posted to callback_url
 """
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import hmac
 import json
@@ -84,10 +83,13 @@ async def run(request: Request) -> JSONResponse:
     if missing:
         return JSONResponse({"error": f"missing fields: {missing}"}, status_code=400)
 
-    # Fire-and-forget — Worker polls /status (backed by callbacks into D1)
-    # rather than holding this HTTP connection open for minutes.
-    asyncio.create_task(_execute_job(body))
-    return JSONResponse({"ok": True, "case_id": body["case_id"]}, status_code=202)
+    # Run synchronously: Fly's auto_stop_machines=stop kills the machine when
+    # no HTTP request is in flight, which would orphan a background task. By
+    # awaiting the job, the request stays open and the machine stays warm. The
+    # Worker holds the connection open via executionCtx.waitUntil — it doesn't
+    # block the user, who is already polling /status backed by D1.
+    await _execute_job(body)
+    return JSONResponse({"ok": True, "case_id": body["case_id"]}, status_code=200)
 
 
 async def _execute_job(job: dict[str, Any]) -> None:
