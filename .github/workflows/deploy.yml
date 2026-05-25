@@ -26,9 +26,21 @@ jobs:
       - uses: actions/checkout@v4
       - uses: superfly/flyctl-actions/setup-flyctl@master
 
-      # `fly deploy` creates the app on first run if it doesn't exist yet.
-      # We also push ENGINE_BEARER as a Fly secret on every run so a rotation
-      # in GitHub propagates automatically.
+      # Create the Fly app on first run (idempotent: re-running is a no-op).
+      # `flyctl apps create` exits non-zero if the app already exists, so we
+      # tolerate that specifically.
+      - name: Create app if missing
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          if flyctl apps list --json | grep -q '"Name":"variantgpt-engine"'; then
+            echo "App variantgpt-engine already exists"
+          else
+            flyctl apps create variantgpt-engine
+          fi
+
+      # Push ENGINE_BEARER as a Fly secret on every run so a rotation in GitHub
+      # propagates automatically. --stage avoids triggering an extra restart.
       - name: Set bearer secret
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
