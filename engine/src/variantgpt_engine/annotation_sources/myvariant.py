@@ -23,8 +23,9 @@ the trimmed-allele convention from the input VCF.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
-from typing import Iterable, Optional
+from typing import Callable, Iterable, Optional
 
 import httpx
 
@@ -34,7 +35,9 @@ from ..models import ClinVarRecord, PopulationAF, PredictorScores, Variant
 log = logging.getLogger(__name__)
 
 MYVARIANT_URL = "https://myvariant.info/v1/variant"
-BATCH_SIZE = 1000           # myvariant.info limit
+BATCH_SIZE = 200            # smaller batches → finer progress + faster recovery on a slow batch
+MAX_CONCURRENT = 10         # parallel batches; myvariant.info handles this fine
+PER_BATCH_TIMEOUT = 30.0    # seconds; one slow batch shouldn't stall the whole job
 FIELDS = ",".join([
     # ClinVar
     "clinvar.rcv.clinical_significance",
@@ -103,22 +106,24 @@ def hgvs_id(jv: JointVariant) -> Optional[str]:
     return f"{chrom}:g.{jv.pos}_{jv.pos + len(ref) - 1}delins{alt}"
 
 
-def fetch_af_for_filtering(
+async def fetch_af_for_filtering_async(
     joints: Iterable[JointVariant],
     *,
-    timeout: float = 30.0,
     assembly: str = "hg38",
+    progress: Optional[Callable[[int, int], None]] = None,
 ) -> dict[tuple[str, int, str, str], float]:
-    """Pre-annotation: ask myvariant.info for the max global AF of each variant.
+    """Pre-annotation: ask myvariant.info for the max global AF per variant.
 
-    Used to apply the rare-variant filter to VCFs that lack INFO/AF or CSQ
-    annotation. The result maps (chrom, pos, ref, alt) → max_af (combined
-    gnomAD exome + genome), or absent from the map if myvariant.info has
-    no record (treat as "unknown / probably rare").
+    Runs up to MAX_CONCURRENT batches in parallel via httpx.AsyncClient. Each
+    batch is BATCH_SIZE (200) variants — small enough that one slow request
+    only stalls 200 variants worth of progress. ~57 batches for a 114k-variant
+    input × 10-way concurrency ≈ 6 round-trips wall time.
 
-    Batched 1000/req via myvariant.info POST. Empty AFs are intentionally
-    omitted from the result so the caller can decide whether to keep
-    unknown-AF variants (default: keep).
+    The `progress` callback fires with (completed_batches, total_batches) after
+    every finished batch so the caller can stream updates to the engine log.
+
+    Returns (chrom, pos, ref, alt) → max_af. Variants myvariant.info doesn't
+    know are absent from the map (callers treat as "unknown / probably rare").
     """
     joints_list = list(joints)
     if not joints_list:
@@ -131,39 +136,76 @@ def fetch_af_for_filtering(
     if not by_id:
         return {}
 
-    out: dict[tuple[str, int, str, str], float] = {}
     ids = list(by_id.keys())
-    with httpx.Client(timeout=timeout, headers={"User-Agent": "variantgpt-engine/0.1"}) as client:
-        for i in range(0, len(ids), BATCH_SIZE):
-            chunk = ids[i:i + BATCH_SIZE]
-            try:
-                resp = client.post(
-                    MYVARIANT_URL,
-                    data={
-                        "ids": ",".join(chunk),
-                        "fields": "gnomad_exome.af.af,gnomad_genome.af.af",
-                        "assembly": assembly,
-                    },
-                )
-                resp.raise_for_status()
-                results = resp.json()
-            except (httpx.HTTPError, ValueError) as exc:
-                log.warning("myvariant.info filter batch %d failed: %s", i, exc)
-                continue
-            if not isinstance(results, list):
-                continue
-            for entry in results:
-                vid = entry.get("query") or entry.get("_id")
-                jv = by_id.get(vid)
-                if not jv:
-                    continue
-                af = max(
-                    _to_float(_nested(entry, "gnomad_exome", "af", "af")) or 0.0,
-                    _to_float(_nested(entry, "gnomad_genome", "af", "af")) or 0.0,
-                )
-                if af > 0:
-                    out[jv.key] = af
+    chunks = [ids[i:i + BATCH_SIZE] for i in range(0, len(ids), BATCH_SIZE)]
+    total = len(chunks)
+    out: dict[tuple[str, int, str, str], float] = {}
+    sem = asyncio.Semaphore(MAX_CONCURRENT)
+    done = 0
+    lock = asyncio.Lock()
+
+    async with httpx.AsyncClient(
+        timeout=PER_BATCH_TIMEOUT,
+        headers={"User-Agent": "variantgpt-engine/0.1"},
+    ) as client:
+        async def fetch_batch(chunk: list[str]) -> dict[tuple[str, int, str, str], float]:
+            nonlocal done
+            async with sem:
+                try:
+                    resp = await client.post(
+                        MYVARIANT_URL,
+                        data={
+                            "ids": ",".join(chunk),
+                            "fields": "gnomad_exome.af.af,gnomad_genome.af.af",
+                            "assembly": assembly,
+                        },
+                    )
+                    resp.raise_for_status()
+                    results = resp.json()
+                except (httpx.HTTPError, ValueError) as exc:
+                    log.warning("myvariant.info filter batch failed: %s", exc)
+                    async with lock:
+                        done += 1
+                        if progress:
+                            progress(done, total)
+                    return {}
+            batch_out: dict[tuple[str, int, str, str], float] = {}
+            if isinstance(results, list):
+                for entry in results:
+                    vid = entry.get("query") or entry.get("_id")
+                    jv = by_id.get(vid)
+                    if not jv:
+                        continue
+                    af = max(
+                        _to_float(_nested(entry, "gnomad_exome", "af", "af")) or 0.0,
+                        _to_float(_nested(entry, "gnomad_genome", "af", "af")) or 0.0,
+                    )
+                    if af > 0:
+                        batch_out[jv.key] = af
+            async with lock:
+                done += 1
+                if progress:
+                    progress(done, total)
+            return batch_out
+
+        results = await asyncio.gather(*(fetch_batch(c) for c in chunks))
+        for r in results:
+            out.update(r)
     return out
+
+
+def fetch_af_for_filtering(
+    joints: Iterable[JointVariant],
+    *,
+    assembly: str = "hg38",
+    progress: Optional[Callable[[int, int], None]] = None,
+) -> dict[tuple[str, int, str, str], float]:
+    """Synchronous wrapper around fetch_af_for_filtering_async — convenient when
+    calling from sync code (tests, CLI). Engine pipelines should prefer the
+    async version so they don't block the event loop on a fresh asyncio.run."""
+    return asyncio.run(fetch_af_for_filtering_async(
+        joints, assembly=assembly, progress=progress,
+    ))
 
 
 def annotate_variants(

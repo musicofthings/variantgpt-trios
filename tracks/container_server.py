@@ -74,6 +74,14 @@ DEMO_MODE_THRESHOLD = 100
 # After the rare-variant + benign-consequence filter, we cap further work at
 # this many candidates. Typical exome filters down to ~3-5k; WGS to ~5-10k.
 MAX_VARIANTS_AFTER_FILTER = 10000
+# Hard ceiling for the AF lookup stage. ~150k at 10-way concurrency × 200/batch
+# ≈ 75 round-trips. Above this, the input almost certainly needs upstream
+# filtering and we'd rather fail fast than burn 10+ minutes of compute.
+MAX_AF_LOOKUP_CAP = 200000
+# Process AF lookup in chunks of N variants so we can post_status() to D1
+# (and the UI's RunMonitor) between chunks. 5000 variants = 25 batches per
+# chunk = ~3-5 seconds with 10-way concurrency, so ~1 status update every 5s.
+AF_LOOKUP_CHUNK_SIZE = 5000
 
 
 def _check_bearer(request: Request) -> JSONResponse | None:
@@ -284,15 +292,53 @@ async def _execute_job(job: dict[str, Any]) -> None:
 
                 # ── Stage 3: live AF filter via myvariant.info ──
                 # If the proband filter didn't bring us under the cap, look up
-                # gnomAD AF for what remains (batched 1000/req) and drop anything
-                # with AF ≥ 1% in any cohort. Variants myvariant.info doesn't know
-                # are kept (likely rare/novel).
+                # gnomAD AF for what remains (batched 200/req, 10-way concurrent)
+                # and drop anything with AF ≥ 1% in any cohort. Variants
+                # myvariant.info doesn't know are kept (likely rare/novel).
+                #
+                # Above MAX_AF_LOOKUP_CAP we refuse: ~150k variants at 10-way
+                # concurrency still takes ~3min, and above that the user almost
+                # certainly needs upstream filtering of their VCFs (the partner
+                # lab should have already restricted to coding regions + rare).
+                if len(joint) > MAX_AF_LOOKUP_CAP:
+                    raise RuntimeError(
+                        f"{len(joint)} variants need AF lookup but the cap is "
+                        f"{MAX_AF_LOOKUP_CAP}. Pre-filter the upstream VCFs — "
+                        f"typical exome should land here at 50-100k after "
+                        f"FILTER+proband-carrier passes; over 150k usually means "
+                        f"the input includes raw genotypes from non-target "
+                        f"regions, low-quality calls, or non-PASS filtered rows. "
+                        f"Suggested upstream: `bcftools view -f PASS -i 'TYPE=\"snp\" || TYPE=\"indel\"' input.vcf.gz | "
+                        f"bcftools norm -m -any | bcftools view -i 'GT[*]=\"alt\"'`"
+                    )
                 if len(joint) > MAX_VARIANTS_AFTER_FILTER // 2:
-                    emit(f"myvariant.info: AF lookup for {len(joint)} variants")
-                    af_map = await asyncio.to_thread(myvariant.fetch_af_for_filtering, joint)
+                    emit(
+                        f"myvariant.info: AF lookup for {len(joint)} variants "
+                        f"(chunks of {AF_LOOKUP_CHUNK_SIZE}, "
+                        f"{myvariant.MAX_CONCURRENT}-way concurrent within each chunk)"
+                    )
+                    af_map: dict[tuple, float] = {}
+                    chunks = [
+                        joint[i:i + AF_LOOKUP_CHUNK_SIZE]
+                        for i in range(0, len(joint), AF_LOOKUP_CHUNK_SIZE)
+                    ]
+                    for idx, chunk in enumerate(chunks, start=1):
+                        chunk_start = time.time()
+                        chunk_af = await myvariant.fetch_af_for_filtering_async(chunk)
+                        af_map.update(chunk_af)
+                        emit(
+                            f"  myvariant.info chunk {idx}/{len(chunks)}: "
+                            f"{len(chunk)} variants, {len(chunk_af)} AFs found "
+                            f"({int((time.time() - chunk_start) * 1000)}ms)"
+                        )
+                        # post_status after every chunk so the UI sees live progress.
+                        await post_status("running")
                     before = len(joint)
                     joint = [jv for jv in joint if af_map.get(jv.key, 0.0) < 0.01]
-                    emit(f"myvariant.info: AF lookup done; dropped {before - len(joint)} common variants (kept {len(joint)})")
+                    emit(
+                        f"myvariant.info: AF lookup done; "
+                        f"dropped {before - len(joint)} common variants (kept {len(joint)})"
+                    )
                     await post_status("running")
 
                 if len(joint) > MAX_VARIANTS_AFTER_FILTER:
