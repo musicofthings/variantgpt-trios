@@ -271,6 +271,12 @@ async function _continueRun(
       cache_urls: cacheUrls,
       callback_url: callbackUrl,
       callback_secret: c.env.ENGINE_WEBHOOK_SECRET,
+      // Proxy endpoint for IndiGen so the engine doesn't hit IGIB directly
+      // (Fly IPs are blocked by IGIB; CF Worker IPs aren't). The engine
+      // authenticates with the same ENGINE_BEARER it received in its
+      // own Authorization header from us.
+      indigen_proxy_url: `${c.env.PUBLIC_API_BASE}/api/internal/indigen-proxy`,
+      indigen_proxy_bearer: c.env.ENGINE_BEARER,
     }),
   });
   c.executionCtx.waitUntil(
@@ -406,6 +412,73 @@ apiRouter.get("/cases/:id/status", async (c) => {
  * The container POSTs progress here. Authenticated by HMAC since the container
  * is the only thing that knows the shared secret.
  */
+/**
+ * POST /api/internal/indigen-proxy
+ *   body = { gene: "<gene_name>" }
+ *   header Authorization: Bearer <ENGINE_BEARER>
+ *
+ * Proxies a query to IGIB IndiGen's data.php for the engine. IGIB blocks
+ * Fly's IP range (every direct request from the engine ConnectTimeouts),
+ * but Cloudflare's edge IPs are routinely allowed by academic servers.
+ * The engine calls this endpoint instead of clingen.igib.res.in directly.
+ *
+ * Returns the raw mydata array verbatim so the engine's existing parser
+ * works without changes.
+ */
+apiRouter.post("/internal/indigen-proxy", async (c) => {
+  // Auth: only the engine should call this, with the same bearer it
+  // authenticates Fly→engine with.
+  const auth = c.req.header("authorization") ?? "";
+  const expected = `Bearer ${c.env.ENGINE_BEARER}`;
+  if (auth !== expected) {
+    return c.json({ error: "unauthorized" }, 401);
+  }
+
+  const { gene } = await c.req.json<{ gene?: string }>();
+  if (!gene || typeof gene !== "string" || gene.length > 100) {
+    return c.json({ error: "bad gene" }, 400);
+  }
+
+  // Edge cache the response — gene queries are idempotent and IndiGen v1
+  // dates to 2020 (data doesn't change). 7-day cache covers most cases.
+  const cacheKey = new Request(
+    `https://indigen-cache.variantgpt/${encodeURIComponent(gene)}`,
+    { method: "GET" },
+  );
+  const cached = await caches.default.match(cacheKey);
+  if (cached) return cached;
+
+  let upstream: Response;
+  try {
+    upstream = await fetch("https://clingen.igib.res.in/indigen/data.php", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "accept": "application/json",
+        "user-agent": "Mozilla/5.0 (compatible; variantgpt-proxy/0.1)",
+      },
+      body: JSON.stringify({ Name: gene }),
+      cf: { cacheTtl: 7 * 24 * 3600, cacheEverything: true },
+    });
+  } catch (e) {
+    return c.json({ error: `igib unreachable: ${String(e).slice(0, 120)}` }, 502);
+  }
+  if (!upstream.ok) {
+    return c.json({ error: `igib ${upstream.status}` }, 502);
+  }
+  // Pass through the JSON. Set our cache-control so caches.default keeps it.
+  const body = await upstream.text();
+  const res = new Response(body, {
+    status: 200,
+    headers: {
+      "content-type": "application/json",
+      "cache-control": "public, s-maxage=604800",
+    },
+  });
+  c.executionCtx.waitUntil(caches.default.put(cacheKey, res.clone()));
+  return res;
+});
+
 apiRouter.post("/internal/engine-callback/:id", async (c) => {
   const id = sanitize(c.req.param("id"));
   if (!id) return c.json({ error: "bad caseId" }, 400);

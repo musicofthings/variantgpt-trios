@@ -37,7 +37,7 @@ import time
 import traceback
 import gc
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import httpx
 from starlette.applications import Starlette
@@ -139,6 +139,8 @@ async def _execute_job(job: dict[str, Any]) -> None:
     case_put_url: str = job["case_put_url"]
     cache_urls: dict[str, dict[str, str]] = job.get("cache_urls", {})
     track_urls: dict[str, str] = job.get("track_urls", {})  # signed GET URLs for reference tracks
+    indigen_proxy_url: Optional[str] = job.get("indigen_proxy_url")
+    indigen_proxy_bearer: Optional[str] = job.get("indigen_proxy_bearer")
     callback_url: str = job["callback_url"]
     secret: str = job["callback_secret"]
 
@@ -582,15 +584,18 @@ async def _execute_job(job: dict[str, Any]) -> None:
                         loop = asyncio.get_event_loop()
                         loop.create_task(post_status("running"))
 
+                via = "via Worker proxy" if indigen_proxy_url else "DIRECT (Fly IP usually blocked)"
                 emit(
                     f"IndiGen: gene-batched API for {len(variants)} variants "
-                    f"(cap {indigenomes.MAX_GENES_PER_CASE} genes by priority, "
+                    f"({via}, cap {indigenomes.MAX_GENES_PER_CASE} genes by priority, "
                     f"{indigenomes.MAX_CONCURRENT}-way concurrent, "
                     f"{int(indigenomes.PER_BATCH_TIMEOUT)}s per-query timeout)"
                 )
                 try:
                     indi_map = await indigenomes.fetch_for_variants_async(
                         variants, progress=indi_progress,
+                        proxy_url=indigen_proxy_url,
+                        proxy_bearer=indigen_proxy_bearer,
                     )
                     indi_hits = indigenomes.apply_indigen_to_variants(variants, indi_map)
                     emit(f"IndiGen: {indi_hits} variants annotated from {len(indi_map)} unique IndiGen records")

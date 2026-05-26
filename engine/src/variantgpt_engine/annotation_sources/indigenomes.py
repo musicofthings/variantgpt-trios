@@ -39,9 +39,12 @@ from ..models import PopulationAF, Variant
 
 log = logging.getLogger(__name__)
 
-INDIGEN_API = "https://clingen.igib.res.in/indigen/data.php"
+# Fall-back direct endpoint (used only when no proxy URL is provided).
+# In production the engine always goes through the Worker proxy because
+# IGIB blocks Fly IPs; direct calls ConnectTimeout.
+INDIGEN_DIRECT = "https://clingen.igib.res.in/indigen/data.php"
 MAX_CONCURRENT = 8
-PER_BATCH_TIMEOUT = 15.0           # IGIB is slow on big genes — fail fast instead of waiting
+PER_BATCH_TIMEOUT = 15.0           # one slow gene shouldn't stall the run
 MAX_GENES_PER_CASE = 400           # cap; gene responses can be 7+ seconds each on heavy genes
 
 # Parse the AC/AN/AF tokens from the IndiGen MongoDB `Info` string, e.g.
@@ -89,21 +92,34 @@ def _normalize_chrom(chrom: str) -> str:
 
 async def fetch_gene(
     client: httpx.AsyncClient, gene: str,
-    *, debug_capture: Optional[list] = None,
+    *, proxy_url: Optional[str] = None, proxy_bearer: Optional[str] = None,
+    debug_capture: Optional[list] = None,
 ) -> dict[tuple[str, int, str, str], dict]:
     """POST a gene query, return (chrom,pos,ref,alt) → {ac,an,af}.
 
-    debug_capture (if provided) is a list we append per-gene diagnostics
-    to so the caller can surface the first few responses to the engine log.
+    If proxy_url is set, calls the Worker proxy (which forwards to IGIB
+    with CF edge IPs); otherwise calls IGIB directly. Direct calls from
+    Fly machines hit ConnectTimeout because IGIB blocks the Fly IP range
+    — always use the proxy in production.
     """
     out: dict[tuple[str, int, str, str], dict] = {}
     err: Optional[str] = None
     body_preview = ""
     try:
-        resp = await client.post(
-            INDIGEN_API,
-            json={"Name": gene},
-        )
+        if proxy_url:
+            headers = {"content-type": "application/json"}
+            if proxy_bearer:
+                headers["authorization"] = f"Bearer {proxy_bearer}"
+            resp = await client.post(
+                proxy_url,
+                json={"gene": gene},
+                headers=headers,
+            )
+        else:
+            resp = await client.post(
+                INDIGEN_DIRECT,
+                json={"Name": gene},
+            )
         body_preview = (resp.text or "")[:120]
         resp.raise_for_status()
         data = resp.json()
@@ -151,6 +167,8 @@ async def fetch_for_variants_async(
     *,
     progress: Optional[Callable[[int, int], None]] = None,
     max_genes: int = MAX_GENES_PER_CASE,
+    proxy_url: Optional[str] = None,
+    proxy_bearer: Optional[str] = None,
 ) -> dict[tuple[str, int, str, str], dict]:
     """Build an (chrom,pos,ref,alt) → {ac,an,af} map for the variants by
     batched gene lookup against the IGIB IndiGen API.
@@ -211,7 +229,12 @@ async def fetch_for_variants_async(
         async def one(gene: str) -> None:
             nonlocal done
             async with sem:
-                gene_map = await fetch_gene(client, gene, debug_capture=debug_capture)
+                gene_map = await fetch_gene(
+                    client, gene,
+                    proxy_url=proxy_url,
+                    proxy_bearer=proxy_bearer,
+                    debug_capture=debug_capture,
+                )
             async with lock:
                 merged.update(gene_map)
                 done += 1
