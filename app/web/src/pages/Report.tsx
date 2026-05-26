@@ -1,19 +1,102 @@
+import { useMemo } from "react";
+import { useParams, useSearchParams, Link } from "react-router-dom";
 import { TierChip } from "../components/TierChip";
 import { ReclassBadge } from "../components/ReclassBadge";
+import { useDemoCase } from "../caseData";
+import type { VariantRow } from "../types";
 
-/** Report view — design spec §4.5. Print-grade preview matching the PDF that
- * /cases/:id/report (PRD §6.6) renders. Research-use, human-signed. */
+/** Report view — design spec §4.5. Print-grade preview that renders the
+ *  selected variants from the workbench. Selected variant IDs come in via
+ *  the `variants` query parameter (comma-separated). */
 export function Report() {
+  const { caseId } = useParams<{ caseId: string }>();
+  const [search] = useSearchParams();
+  const { data, loading, error } = useDemoCase(caseId);
+
+  const selectedIds = useMemo(() => {
+    const raw = search.get("variants") ?? "";
+    return new Set(raw.split(",").filter(Boolean));
+  }, [search]);
+
+  // The variants the curator selected on the workbench. If selection is
+  // empty (someone hit the URL directly), fall back to all P + LP variants
+  // — almost always what the user actually wants for a report.
+  const reportVariants: VariantRow[] = useMemo(() => {
+    if (!data) return [];
+    if (selectedIds.size > 0) {
+      return data.variants.filter((v) => selectedIds.has(v.id));
+    }
+    return data.variants.filter((v) => v.baseline_tier === "P" || v.baseline_tier === "LP");
+  }, [data, selectedIds]);
+
+  const reclassDecisions = useMemo(
+    () => reportVariants.filter((v) => v.reclass != null),
+    [reportVariants],
+  );
+
+  if (loading) {
+    return <div className="card">Loading case…</div>;
+  }
+  if (error || !data) {
+    return (
+      <div className="card">
+        <p>Could not load case data: {error}</p>
+        <Link to={`/cases/${caseId}`}>Back to workbench</Link>
+      </div>
+    );
+  }
+
+  const pedigree = data.caseRow;
+  const today = new Date().toISOString().slice(0, 10);
+
+  function exportTSV() {
+    const rows = [
+      ["Gene", "HGVSc", "HGVSp", "Consequence", "Inheritance", "AF_global", "AF_SAS", "AF_Indi", "Tier", "Reclass"],
+      ...reportVariants.map((v) => [
+        v.gene ?? "", v.hgvs_c ?? "", v.hgvs_p ?? "", v.consequence ?? "",
+        v.inheritance_models.join("|"),
+        v.af_global?.toString() ?? "",
+        v.af_sas?.toString() ?? "",
+        v.af_indi?.toString() ?? "",
+        v.baseline_tier,
+        v.reclass ? `${v.reclass.from}->${v.reclass.to} (delta ${v.reclass.delta})` : "",
+      ]),
+    ];
+    downloadFile(
+      `${caseId}-report.tsv`,
+      rows.map((r) => r.map((c) => c.replace(/\t/g, " ")).join("\t")).join("\n"),
+      "text/tab-separated-values",
+    );
+  }
+
+  function exportJSON() {
+    const payload = {
+      case_id: caseId,
+      generated_at: new Date().toISOString(),
+      proband: pedigree.proband,
+      variants: reportVariants,
+    };
+    downloadFile(
+      `${caseId}-report.json`,
+      JSON.stringify(payload, null, 2),
+      "application/json",
+    );
+  }
+
   return (
     <>
       <div className="topbar">
         <h1>Report</h1>
         <span className="pill mono">GRCh38</span>
-        <span className="pill">Draft · awaiting signature</span>
+        <span className="pill">
+          {reportVariants.length} variant{reportVariants.length === 1 ? "" : "s"}
+          {selectedIds.size === 0 ? " · auto-selected P/LP" : " · selected"}
+        </span>
         <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-          <button>Export TSV</button>
-          <button>Export JSON</button>
-          <button className="primary">Export PDF</button>
+          <Link to={`/cases/${caseId}`}><button>← Back to workbench</button></Link>
+          <button onClick={exportTSV}>Export TSV</button>
+          <button onClick={exportJSON}>Export JSON</button>
+          <button className="primary" onClick={() => window.print()}>Print / PDF</button>
         </div>
       </div>
 
@@ -31,120 +114,102 @@ export function Report() {
           <div style={{ fontSize: 11, letterSpacing: "0.1em", color: "var(--ink-soft)", textTransform: "uppercase" }}>
             VariantGPT · Trio variant interpretation
           </div>
-          <h2 style={{ marginTop: 4 }}>GIAB trio (HG002/3/4) — case demo-001</h2>
+          <h2 style={{ marginTop: 4 }}>{pedigree.name}</h2>
           <div style={{ color: "var(--ink-soft)", fontSize: 13, marginTop: 4 }}>
-            Build GRCh38 · Generated 2026-05-23 · Engine v0.1.0
+            Case {caseId} · Build GRCh38 · Generated {today}
           </div>
         </header>
 
         <Section title="Case summary">
           <DL items={[
-            ["Proband", "HG002 (affected, sex unknown)"],
-            ["Parents", "HG003 (father, unaffected) · HG004 (mother, unaffected)"],
-            ["Consanguinity", "No"],
-            ["Age of onset", "—"],
-            ["Prior testing", "—"],
+            ["Proband", pedigree.proband ?? "—"],
+            ["Variants surveyed", `${data.variants.length}`],
+            ["VUS in case", `${pedigree.vus_count ?? "—"}`],
+            ["Reclassifications proposed", `${pedigree.reclass_count ?? "—"}`],
+            ["Variants in this report", `${reportVariants.length}`],
           ]} />
         </Section>
 
-        <Section title="Phenotype (HPO)">
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            <span className="hpo-chip confirmed">HP:0001250 · Seizure</span>
-            <span className="hpo-chip confirmed">HP:0001263 · Global developmental delay</span>
-          </div>
+        <Section title="Selected findings">
+          {reportVariants.length === 0 ? (
+            <p style={{ fontSize: 13, color: "var(--ink-soft)" }}>
+              No variants selected. Go back to the workbench, check the boxes for variants you
+              want in the report, then click <strong>Generate report</strong>.
+            </p>
+          ) : (
+            <table className="table" style={{ marginTop: 8 }}>
+              <thead>
+                <tr>
+                  <th className="num">#</th>
+                  <th>Gene · variant</th>
+                  <th>Inheritance</th>
+                  <th className="num">AF SAS</th>
+                  <th>Tier</th>
+                  <th>Reclass</th>
+                </tr>
+              </thead>
+              <tbody>
+                {reportVariants.map((v, i) => (
+                  <tr key={v.id} className={v.reclass ? "reclass" : undefined}>
+                    <td className="num">{i + 1}</td>
+                    <td className="mono">
+                      <strong>{v.gene}</strong> {v.hgvs_c}
+                      {v.hgvs_p ? <span style={{ color: "var(--ink-soft)" }}> {v.hgvs_p}</span> : null}
+                    </td>
+                    <td>{v.inheritance_models.join(", ") || "—"}</td>
+                    <td className="num">{fmt(v.af_sas)}</td>
+                    <td><TierChip tier={v.baseline_tier} /></td>
+                    <td>{v.reclass ? <ReclassBadge {...v.reclass} /> : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </Section>
 
-        <Section title="Prioritized findings">
-          <table className="table" style={{ marginTop: 8 }}>
-            <thead>
-              <tr>
-                <th className="num">#</th>
-                <th>Gene · variant</th>
-                <th>Inheritance</th>
-                <th>Tier</th>
-                <th>Reclass</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td className="num">1</td>
-                <td className="mono">TTN c.41329C&gt;T p.Arg13777*</td>
-                <td>de novo</td>
-                <td><TierChip tier="LP" /></td>
-                <td>—</td>
-              </tr>
-              <tr className="reclass">
-                <td className="num">2</td>
-                <td className="mono">HBB c.20A&gt;T p.Glu7Val</td>
-                <td>AR hom</td>
-                <td><TierChip tier="VUS" /></td>
-                <td><ReclassBadge from="VUS" to="LB" delta={-5} criteria={["PM2 retracted", "BS1"]} /></td>
-              </tr>
-            </tbody>
-          </table>
-          <p style={{ marginTop: 12, fontSize: 13 }}>
-            <strong>TTN c.41329C&gt;T (p.Arg13777*)</strong> — predicted loss-of-function, confirmed
-            de novo. Criteria: PVS1 (Strong), PS2 (Strong), PM2 (Supporting), PP3 (Supporting).
-            Sum +11 → Likely Pathogenic.
-          </p>
-          <p style={{ marginTop: 8, fontSize: 13 }}>
-            <strong>HBB c.20A&gt;T (p.Glu7Val)</strong> — present at AF 0.019 in IndiGenomes and 0.012
-            in gnomAD-SAS, exceeding the BS1 threshold. PM2 is retracted; BS1 fires. Reclassification
-            proposal VUS → Likely Benign (Δ −5) — <em>awaiting curator decision</em>.
-          </p>
-        </Section>
-
-        <Section title="Reclassification decisions">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Variant</th>
-                <th>Proposal</th>
-                <th>Decision</th>
-                <th>Curator</th>
-                <th>Note</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td className="mono">HBB c.20A&gt;T</td>
-                <td>VUS → LB (Δ −5)</td>
-                <td><em>Pending</em></td>
-                <td>—</td>
-                <td>—</td>
-              </tr>
-            </tbody>
-          </table>
-        </Section>
+        {reclassDecisions.length > 0 ? (
+          <Section title="Reclassification decisions">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Variant</th>
+                  <th>Proposal</th>
+                  <th>Decision</th>
+                  <th>Curator</th>
+                  <th>Note</th>
+                </tr>
+              </thead>
+              <tbody>
+                {reclassDecisions.map((v) => (
+                  <tr key={v.id}>
+                    <td className="mono">{v.gene} {v.hgvs_c}</td>
+                    <td>{v.reclass!.from} → {v.reclass!.to} (Δ {v.reclass!.delta})</td>
+                    <td><em>Pending</em></td>
+                    <td>—</td>
+                    <td>—</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Section>
+        ) : null}
 
         <Section title="Methods & limitations">
           <p style={{ fontSize: 13 }}>
-            VCFs were normalized with <code>bcftools norm</code> and lifted to GRCh38 where required.
-            Joint genotypes were merged across the trio; QC included Mendelian error rate, sex
-            check, and relatedness (KING-robust). Variants were annotated with VEP (MANE Select),
-            ClinVar, gnomAD v4 (including SAS), IndiGenomes, GenomeAsia, and precomputed
-            AlphaMissense / REVEL / CADD / SpliceAI scores. ACMG/AMP classification used the
-            ClinGen SVI Bayesian point system. Variants called VUS were re-evaluated against
-            South-Asian frequency baselines (PRD §4.6); reclassification proposals never
-            auto-commit and require curator decision.
+            Per-sample VCFs were preprocessed (FILTER pass, GQ ≥ 20, DP ≥ 10, AB 0.20-0.80,
+            multi-allelic split, allele trimming) and merged into a trio joint matrix.
+            Inheritance models (de novo / AR hom / compound het / AD inherited / X-linked /
+            mitochondrial) were assigned with GATK-style QC gating. Variants were filtered
+            to the proband-carrier set, then to rare (AF &lt; 1% in gnomAD v4 exome+genome),
+            then annotated via Ensembl VEP REST + myvariant.info (ClinVar, dbNSFP). ACMG/AMP
+            classification used the ClinGen SVI Bayesian point system. VUS were re-evaluated
+            against South-Asian frequency baselines (gnomAD-SAS, IndiGenomes); reclassification
+            proposals never auto-commit and require curator decision.
           </p>
           <p style={{ fontSize: 13, marginTop: 8 }}>
-            Limitations: SNVs and small indels only; CNV/SV and mitochondrial heteroplasmy out of
-            scope for v1. Liftover failures are flagged, not silently dropped.
+            Limitations: SNVs and small indels only; CNV/SV and mitochondrial heteroplasmy
+            out of scope. Liftover (37 → 38) requires CrossMap and is not yet wired.
           </p>
-        </Section>
-
-        <Section title="Version snapshot">
-          <DL items={[
-            ["Engine", "v0.1.0"],
-            ["Reference", "GRCh38 / GENCODE 45 / MANE 1.3"],
-            ["gnomAD", "v4.1 (genome + exome)"],
-            ["IndiGenomes", "v1.1"],
-            ["GenomeAsia", "100K pilot"],
-            ["ClinVar", "2026-05-15 weekly"],
-            ["Predictors", "AlphaMissense 2023.1 · REVEL 1.3 · CADD 1.7 · SpliceAI 1.3"],
-            ["LLM", "claude-opus-4-7 via AI Gateway → OpenRouter (pinned, fallback disabled)"],
-          ]} />
         </Section>
 
         <Section title="Signatory">
@@ -162,8 +227,8 @@ export function Report() {
             letterSpacing: "0.04em",
           }}
         >
-          RESEARCH USE ONLY. Not for diagnostic purposes. Reclassification proposals require a
-          recorded human decision before they appear in a signed report (PRD §4.10).
+          RESEARCH USE ONLY. Not for diagnostic purposes. Reclassification proposals
+          require a recorded human decision before they appear in a signed report.
         </footer>
       </article>
     </>
@@ -199,4 +264,23 @@ function DL({ items }: { items: [string, string][] }) {
       ))}
     </dl>
   );
+}
+
+function fmt(v?: number | null): string {
+  if (v == null) return "—";
+  if (v === 0) return "0";
+  if (v < 1e-4) return v.toExponential(1);
+  return v.toFixed(4);
+}
+
+function downloadFile(filename: string, content: string, mime: string) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }

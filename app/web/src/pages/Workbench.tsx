@@ -1,14 +1,22 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { TierChip } from "../components/TierChip";
 import { ReclassBadge } from "../components/ReclassBadge";
 import { EvidenceLedger } from "../components/EvidenceLedger";
 import { PopulationFreqPanel } from "../components/PopulationFreqPanel";
 import { PredictorGauges } from "../components/PredictorGauges";
 import { RunMonitor, useJobStatus } from "../components/RunMonitor";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { useDemoCase } from "../caseData";
 import { api } from "../apiBase";
-import type { InheritanceModel, VariantRow } from "../types";
+import type { InheritanceModel, Tier, VariantRow } from "../types";
+
+type SortKey = "gene" | "tier" | "consequence" | "af_global" | "af_sas" | "af_indi" | "priority" | "reclass" | null;
+type SortDir = "asc" | "desc";
+
+const TIER_RANK: Record<Tier, number> = { P: 0, LP: 1, VUS: 2, LB: 3, B: 4 };
+
+/** Storage key for variant selection per case — survives reloads. */
+const SELECTION_KEY = (caseId: string) => `vgpt:selection:${caseId}`;
 
 const TABS: { label: string; match: (v: VariantRow) => boolean }[] = [
   { label: "All",              match: () => true },
@@ -93,10 +101,16 @@ const FALLBACK_MOCK: VariantRow[] = [
 ];
 
 export function Workbench() {
+  const navigate = useNavigate();
   const [tab, setTab] = useState<string>("All");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [filters, setFilters] = useState({ tier: "all", gene: "", afMax: 0.5 });
+  // Tier as a SET so users can multi-select (P + LP simultaneously, etc.).
+  const [tierFilter, setTierFilter] = useState<Set<Tier>>(new Set());
+  const [geneFilter, setGeneFilter] = useState("");
+  const [afMax, setAfMax] = useState(0.5);
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [sortKey, setSortKey] = useState<SortKey>("priority");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
 
   const { caseId } = useParams<{ caseId: string }>();
   const { data, loading, error } = useDemoCase(caseId);
@@ -107,19 +121,97 @@ export function Workbench() {
   const variants: VariantRow[] = data?.variants ?? (error && !isUploadedCase ? FALLBACK_MOCK : []);
   const caseName = data?.caseRow.name ?? (isUploadedCase ? `Case ${caseId}` : "Demo trio (loading…)");
 
+  // Selection state — persisted per case so navigating away and back keeps picks.
+  const [selectedForReport, setSelectedForReport] = useState<Set<string>>(() => {
+    if (!caseId) return new Set();
+    try {
+      const raw = localStorage.getItem(SELECTION_KEY(caseId));
+      return new Set(raw ? JSON.parse(raw) : []);
+    } catch { return new Set(); }
+  });
+  useEffect(() => {
+    if (!caseId) return;
+    try {
+      localStorage.setItem(SELECTION_KEY(caseId), JSON.stringify([...selectedForReport]));
+    } catch { /* quota or private mode — non-fatal */ }
+  }, [selectedForReport, caseId]);
+
+  function toggleSelect(id: string) {
+    setSelectedForReport((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+  function selectAllVisible(checked: boolean) {
+    setSelectedForReport((prev) => {
+      const next = new Set(prev);
+      for (const v of visible) { if (checked) next.add(v.id); else next.delete(v.id); }
+      return next;
+    });
+  }
+  function clearSelection() { setSelectedForReport(new Set()); }
+
+  // Tier counts for the facet chips (computed from current-tab variants only —
+  // tells you "how many P/LP/VUS/etc. exist within the active inheritance tab").
   const tabSpec = TABS.find((t) => t.label === tab) ?? TABS[0];
-  const visible = useMemo(
+  const tierCounts = useMemo(() => {
+    const counts: Record<Tier, number> = { P: 0, LP: 0, VUS: 0, LB: 0, B: 0 };
+    for (const v of variants) {
+      if (!tabSpec.match(v)) continue;
+      counts[v.baseline_tier] = (counts[v.baseline_tier] ?? 0) + 1;
+    }
+    return counts;
+  }, [variants, tabSpec]);
+
+  const filtered = useMemo(
     () => variants.filter((v) => {
       if (!tabSpec.match(v)) return false;
-      if (filters.tier !== "all" && v.baseline_tier !== filters.tier) return false;
-      if (filters.gene && !(v.gene ?? "").toLowerCase().includes(filters.gene.toLowerCase())) return false;
-      if ((v.af_global ?? 0) > filters.afMax && (v.af_sas ?? 0) > filters.afMax) return false;
+      if (tierFilter.size > 0 && !tierFilter.has(v.baseline_tier)) return false;
+      if (geneFilter && !(v.gene ?? "").toLowerCase().includes(geneFilter.toLowerCase())) return false;
+      if ((v.af_global ?? 0) > afMax && (v.af_sas ?? 0) > afMax) return false;
       return true;
     }),
-    [tabSpec, filters, variants],
+    [tabSpec, tierFilter, geneFilter, afMax, variants],
   );
+
+  // Sort the filtered set. Returns a new array; doesn't mutate `filtered`.
+  const visible = useMemo(() => {
+    if (!sortKey) return filtered;
+    const dir = sortDir === "asc" ? 1 : -1;
+    const get = (v: VariantRow) => {
+      switch (sortKey) {
+        case "gene": return v.gene ?? "";
+        case "tier": return TIER_RANK[v.baseline_tier] ?? 99;
+        case "consequence": return v.consequence ?? "";
+        case "af_global": return v.af_global ?? -1;
+        case "af_sas": return v.af_sas ?? -1;
+        case "af_indi": return v.af_indi ?? -1;
+        case "priority": return v.priority_score ?? 0;
+        case "reclass": return v.reclass ? (v.reclass.delta ?? 0) : 0;
+        default: return 0;
+      }
+    };
+    return [...filtered].sort((a, b) => {
+      const va = get(a); const vb = get(b);
+      if (va < vb) return -1 * dir;
+      if (va > vb) return 1 * dir;
+      return 0;
+    });
+  }, [filtered, sortKey, sortDir]);
+
+  function toggleSort(key: NonNullable<SortKey>) {
+    if (sortKey === key) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDir(key === "gene" || key === "consequence" ? "asc" : "desc");
+    }
+  }
+
   const selected = variants.find((v) => v.id === selectedId) ?? null;
   const reclassCount = variants.filter((v) => v.reclass).length;
+  const allVisibleSelected = visible.length > 0 && visible.every((v) => selectedForReport.has(v.id));
 
   if (showMonitor) {
     return (
@@ -154,7 +246,24 @@ export function Workbench() {
         <span className="pill mono">GRCh38</span>
         <span className="pill">{loading ? "Loading…" : error ? "Demo unavailable" : "Ready"}</span>
         {isUploadedCase && caseId ? <RerunButton caseId={caseId} /> : null}
-        <button className="primary">Generate report</button>
+        {selectedForReport.size > 0 ? (
+          <span style={{ fontSize: 13, color: "var(--ink-soft)" }}>
+            <strong style={{ color: "var(--ink)" }}>{selectedForReport.size}</strong> selected
+            <button onClick={clearSelection} style={{ marginLeft: 6, fontSize: 12 }}>clear</button>
+          </span>
+        ) : null}
+        <button
+          className="primary"
+          disabled={selectedForReport.size === 0}
+          title={selectedForReport.size === 0 ? "Select variants (checkboxes) to include in the report" : ""}
+          onClick={() => {
+            if (!caseId) return;
+            const ids = [...selectedForReport].join(",");
+            navigate(`/cases/${caseId}/report?variants=${encodeURIComponent(ids)}`);
+          }}
+        >
+          Generate report{selectedForReport.size > 0 ? ` (${selectedForReport.size})` : ""}
+        </button>
       </div>
 
       <div role="tablist" style={{ display: "flex", gap: 4, marginBottom: 16, flexWrap: "wrap" }}>
@@ -194,87 +303,142 @@ export function Workbench() {
       </div>
 
       {filtersOpen ? (
-        <div className="card" style={{ padding: 16, marginBottom: 16, display: "grid", gap: 12, gridTemplateColumns: "repeat(3, 1fr)" }}>
-          <label style={{ display: "grid", gap: 4, fontSize: 12, color: "var(--ink-soft)" }}>
-            Tier
-            <select
-              value={filters.tier}
-              onChange={(e) => setFilters({ ...filters, tier: e.target.value })}
-            >
-              <option value="all">All</option>
-              <option value="P">Pathogenic</option>
-              <option value="LP">Likely Pathogenic</option>
-              <option value="VUS">VUS</option>
-              <option value="LB">Likely Benign</option>
-              <option value="B">Benign</option>
-            </select>
-          </label>
-          <label style={{ display: "grid", gap: 4, fontSize: 12, color: "var(--ink-soft)" }}>
-            Gene
-            <input
-              value={filters.gene}
-              onChange={(e) => setFilters({ ...filters, gene: e.target.value })}
-              placeholder="e.g. HBB"
-              className="mono"
-            />
-          </label>
-          <label style={{ display: "grid", gap: 4, fontSize: 12, color: "var(--ink-soft)" }}>
-            Max AF (global or SAS): <span className="mono">{filters.afMax.toFixed(3)}</span>
-            <input
-              type="range"
-              min={0}
-              max={0.1}
-              step={0.001}
-              value={filters.afMax}
-              onChange={(e) => setFilters({ ...filters, afMax: Number(e.target.value) })}
-            />
-          </label>
+        <div className="card" style={{ padding: 16, marginBottom: 16, display: "grid", gap: 14 }}>
+          {/* Tier facet: chip-style multi-select with live counts. Click P + LP
+              to focus on actionable findings only. */}
+          <div>
+            <div style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 6 }}>
+              Tier (click to include/exclude)
+            </div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {(["P", "LP", "VUS", "LB", "B"] as Tier[]).map((tier) => {
+                const active = tierFilter.has(tier);
+                const count = tierCounts[tier];
+                return (
+                  <button
+                    key={tier}
+                    onClick={() => {
+                      setTierFilter((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(tier)) next.delete(tier); else next.add(tier);
+                        return next;
+                      });
+                    }}
+                    disabled={count === 0}
+                    style={{
+                      padding: "4px 10px",
+                      borderRadius: 999,
+                      border: "1px solid var(--rule)",
+                      background: active ? "var(--primary-soft)" : "var(--paper)",
+                      opacity: count === 0 ? 0.4 : 1,
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 6,
+                      cursor: count === 0 ? "default" : "pointer",
+                    }}
+                  >
+                    <TierChip tier={tier} />
+                    <span className="mono" style={{ fontSize: 11, color: "var(--ink-soft)" }}>
+                      {count}
+                    </span>
+                  </button>
+                );
+              })}
+              {tierFilter.size > 0 ? (
+                <button onClick={() => setTierFilter(new Set())} style={{ fontSize: 12, color: "var(--ink-soft)" }}>
+                  reset
+                </button>
+              ) : null}
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gap: 12, gridTemplateColumns: "1fr 1fr" }}>
+            <label style={{ display: "grid", gap: 4, fontSize: 12, color: "var(--ink-soft)" }}>
+              Gene
+              <input
+                value={geneFilter}
+                onChange={(e) => setGeneFilter(e.target.value)}
+                placeholder="e.g. HBB"
+                className="mono"
+              />
+            </label>
+            <label style={{ display: "grid", gap: 4, fontSize: 12, color: "var(--ink-soft)" }}>
+              Max AF (global or SAS): <span className="mono">{afMax.toFixed(3)}</span>
+              <input
+                type="range"
+                min={0}
+                max={0.1}
+                step={0.001}
+                value={afMax}
+                onChange={(e) => setAfMax(Number(e.target.value))}
+              />
+            </label>
+          </div>
         </div>
       ) : null}
 
-      <div style={{ display: "grid", gridTemplateColumns: selected ? "1fr 460px" : "1fr", gap: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: selected ? "1fr 460px" : "1fr", gap: 16, alignItems: "start" }}>
         <div className="card" style={{ padding: 0 }}>
           <table className="table">
             <thead>
               <tr>
+                {/* Select-all checkbox for this tab's currently-visible rows. */}
+                <th style={{ width: 28 }}>
+                  <input
+                    type="checkbox"
+                    aria-label="Select all visible variants"
+                    checked={allVisibleSelected}
+                    onChange={(e) => selectAllVisible(e.target.checked)}
+                  />
+                </th>
                 <th className="num">#</th>
-                <th>Gene</th>
+                <SortHeader label="Gene" sortKey="gene" active={sortKey} dir={sortDir} onSort={toggleSort} />
                 <th>HGVS</th>
-                <th>Consequence</th>
+                <SortHeader label="Consequence" sortKey="consequence" active={sortKey} dir={sortDir} onSort={toggleSort} />
                 <th>Inheritance</th>
-                <th className="num">AF global</th>
-                <th className="num">AF SAS</th>
-                <th className="num">AF Indi</th>
-                <th>Tier</th>
-                <th>Δ</th>
+                <SortHeader label="AF global" sortKey="af_global" active={sortKey} dir={sortDir} onSort={toggleSort} numeric />
+                <SortHeader label="AF SAS" sortKey="af_sas" active={sortKey} dir={sortDir} onSort={toggleSort} numeric />
+                <SortHeader label="AF Indi" sortKey="af_indi" active={sortKey} dir={sortDir} onSort={toggleSort} numeric />
+                <SortHeader label="Tier" sortKey="tier" active={sortKey} dir={sortDir} onSort={toggleSort} />
+                <SortHeader label="Δ" sortKey="reclass" active={sortKey} dir={sortDir} onSort={toggleSort} />
               </tr>
             </thead>
             <tbody>
-              {visible.map((v, i) => (
-                <tr
-                  key={v.id}
-                  className={v.reclass ? "reclass" : undefined}
-                  onClick={() => setSelectedId(v.id)}
-                  style={{ cursor: "pointer", background: selectedId === v.id ? "var(--primary-soft)" : undefined }}
-                >
-                  <td className="num">{i + 1}</td>
-                  <td className="mono">{v.gene}</td>
-                  <td className="mono">
-                    {v.hgvs_c}{" "}
-                    <span style={{ color: "var(--ink-soft)" }}>{v.hgvs_p}</span>
-                  </td>
-                  <td>{v.consequence}</td>
-                  <td>{v.inheritance_models.map(humanizeModel).join(", ")}</td>
-                  <td className="num">{fmt(v.af_global)}</td>
-                  <td className="num">{fmt(v.af_sas)}</td>
-                  <td className="num">{fmt(v.af_indi)}</td>
-                  <td><TierChip tier={v.baseline_tier} /></td>
-                  <td>{v.reclass ? <ReclassBadge {...v.reclass} /> : null}</td>
-                </tr>
-              ))}
+              {visible.map((v, i) => {
+                const checked = selectedForReport.has(v.id);
+                return (
+                  <tr
+                    key={v.id}
+                    className={v.reclass ? "reclass" : undefined}
+                    style={{ cursor: "pointer", background: selectedId === v.id ? "var(--primary-soft)" : undefined }}
+                  >
+                    <td onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${v.gene ?? v.id} for report`}
+                        checked={checked}
+                        onChange={() => toggleSelect(v.id)}
+                      />
+                    </td>
+                    <td className="num" onClick={() => setSelectedId(v.id)}>{i + 1}</td>
+                    <td className="mono" onClick={() => setSelectedId(v.id)}>{v.gene}</td>
+                    <td className="mono" onClick={() => setSelectedId(v.id)}>
+                      {v.hgvs_c}{" "}
+                      <span style={{ color: "var(--ink-soft)" }}>{v.hgvs_p}</span>
+                    </td>
+                    <td onClick={() => setSelectedId(v.id)}>{v.consequence}</td>
+                    <td onClick={() => setSelectedId(v.id)}>{v.inheritance_models.map(humanizeModel).join(", ")}</td>
+                    <td className="num" onClick={() => setSelectedId(v.id)}>{fmt(v.af_global)}</td>
+                    <td className="num" onClick={() => setSelectedId(v.id)}>{fmt(v.af_sas)}</td>
+                    <td className="num" onClick={() => setSelectedId(v.id)}>{fmt(v.af_indi)}</td>
+                    <td onClick={() => setSelectedId(v.id)}><TierChip tier={v.baseline_tier} /></td>
+                    <td onClick={() => setSelectedId(v.id)}>{v.reclass ? <ReclassBadge {...v.reclass} /> : null}</td>
+                  </tr>
+                );
+              })}
               {visible.length === 0 ? (
                 <tr>
-                  <td colSpan={10} style={{ textAlign: "center", color: "var(--ink-soft)", padding: 24 }}>
+                  <td colSpan={11} style={{ textAlign: "center", color: "var(--ink-soft)", padding: 24 }}>
                     No variants match the current filters.
                   </td>
                 </tr>
@@ -283,7 +447,14 @@ export function Workbench() {
           </table>
         </div>
 
-        {selected ? <Drawer variant={selected} onClose={() => setSelectedId(null)} /> : null}
+        {/* Sticky drawer — stays on screen while the user scrolls the long
+            variant table. position:sticky with top offset keeps it pinned
+            under the topbar. */}
+        {selected ? (
+          <div style={{ position: "sticky", top: 16, maxHeight: "calc(100vh - 32px)", overflowY: "auto" }}>
+            <Drawer variant={selected} onClose={() => setSelectedId(null)} />
+          </div>
+        ) : null}
       </div>
     </>
   );
@@ -423,6 +594,33 @@ function fmt(v?: number | null): string {
   if (v === 0) return "0";
   if (v < 1e-4) return v.toExponential(1);
   return v.toFixed(4);
+}
+
+/** Sortable column header. Click toggles direction; clicking a different
+ * column makes that one active (default direction depends on the field). */
+function SortHeader({
+  label, sortKey, active, dir, onSort, numeric,
+}: {
+  label: string;
+  sortKey: NonNullable<SortKey>;
+  active: SortKey;
+  dir: SortDir;
+  onSort: (k: NonNullable<SortKey>) => void;
+  numeric?: boolean;
+}) {
+  const isActive = active === sortKey;
+  const arrow = isActive ? (dir === "asc" ? " ▲" : " ▼") : "";
+  return (
+    <th
+      className={numeric ? "num" : ""}
+      onClick={() => onSort(sortKey)}
+      style={{ cursor: "pointer", userSelect: "none" }}
+      title={`Sort by ${label}`}
+    >
+      <span>{label}</span>
+      <span className="mono" style={{ color: "var(--ink-soft)", fontSize: 10 }}>{arrow}</span>
+    </th>
+  );
 }
 
 /** "Re-run analysis" button. Posts /api/cases/:id/rerun, which fetches the
