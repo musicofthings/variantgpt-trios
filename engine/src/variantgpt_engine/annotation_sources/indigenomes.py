@@ -41,7 +41,8 @@ log = logging.getLogger(__name__)
 
 INDIGEN_API = "https://clingen.igib.res.in/indigen/data.php"
 MAX_CONCURRENT = 8
-PER_BATCH_TIMEOUT = 30.0
+PER_BATCH_TIMEOUT = 15.0           # IGIB is slow on big genes — fail fast instead of waiting
+MAX_GENES_PER_CASE = 400           # cap; gene responses can be 7+ seconds each on heavy genes
 
 # Parse the AC/AN/AF tokens from the IndiGen MongoDB `Info` string, e.g.
 #   "AC=86;AF=0.042;AN=2050;DP=24889;FS=0.517;..."
@@ -124,24 +125,46 @@ async def fetch_for_variants_async(
     variants: Iterable[Variant],
     *,
     progress: Optional[Callable[[int, int], None]] = None,
+    max_genes: int = MAX_GENES_PER_CASE,
 ) -> dict[tuple[str, int, str, str], dict]:
     """Build an (chrom,pos,ref,alt) → {ac,an,af} map for the variants by
-    batched gene lookup. Concurrent fetches of unique gene names; each gene
-    response carries hundreds of variants so this is efficient.
+    batched gene lookup against the IGIB IndiGen API.
+
+    Genes are queried in priority order (highest variant priority first,
+    then most-variants-per-gene). Capped at `max_genes` because every
+    gene query downloads ALL variants in that gene from IndiGen's MongoDB
+    — heavy genes like BRCA1 return 1400+ records and take 7+ seconds.
+    For a typical case with ~8k candidates the top 400 genes cover all
+    P/LP + most high-priority VUS variants.
 
     progress callback fires (done_genes, total_genes) after each gene
-    response so the engine can surface live progress.
+    response.
     """
-    # Collect unique non-empty gene names.
-    genes: list[str] = []
-    seen: set[str] = set()
+    # Build a (gene -> sort_key) map. Sort key:
+    #   1. -max_priority_score among variants in this gene
+    #   2. -count of variants in this gene (more = more chance of reclass)
+    # so genes with high-priority variants are queried first.
+    from collections import defaultdict
+    by_gene: dict[str, list] = defaultdict(list)
     for v in variants:
         g = (v.gene or "").strip()
-        if g and g not in seen:
-            seen.add(g)
-            genes.append(g)
-    if not genes:
+        if g:
+            by_gene[g].append(v)
+    if not by_gene:
         return {}
+
+    def gene_key(gene: str):
+        vs = by_gene[gene]
+        max_prio = max((v.priority_score or 0) for v in vs)
+        return (-max_prio, -len(vs), gene)
+
+    sorted_genes = sorted(by_gene.keys(), key=gene_key)
+    if len(sorted_genes) > max_genes:
+        log.info(
+            "IndiGen: capping %d → %d genes (sorted by priority)",
+            len(sorted_genes), max_genes,
+        )
+    genes = sorted_genes[:max_genes]
 
     total = len(genes)
     done = 0

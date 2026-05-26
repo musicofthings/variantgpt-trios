@@ -582,8 +582,12 @@ async def _execute_job(job: dict[str, Any]) -> None:
                         loop = asyncio.get_event_loop()
                         loop.create_task(post_status("running"))
 
-                emit(f"IndiGen: gene-batched API for {len(variants)} variants "
-                     f"({indigenomes.MAX_CONCURRENT}-way concurrent)")
+                emit(
+                    f"IndiGen: gene-batched API for {len(variants)} variants "
+                    f"(cap {indigenomes.MAX_GENES_PER_CASE} genes by priority, "
+                    f"{indigenomes.MAX_CONCURRENT}-way concurrent, "
+                    f"{int(indigenomes.PER_BATCH_TIMEOUT)}s per-query timeout)"
+                )
                 try:
                     indi_map = await indigenomes.fetch_for_variants_async(
                         variants, progress=indi_progress,
