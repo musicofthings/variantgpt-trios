@@ -240,6 +240,16 @@ async function _continueRun(
     variants: await signCacheStage("variants"),
   };
 
+  // Reference tracks the engine downloads at startup. These are large blobs
+  // (~500 MB for IndiGenomes) that live in R2 at well-known keys, built
+  // periodically by the build_indigen_freqs.py + workflow. Signed 24h URLs
+  // so the engine can stream them down once per Fly machine.
+  const trackUrls = {
+    indigenomes: await signR2(
+      c.env, "variantgpt", "tracks/indigenomes/v1/indigen.sqlite", "GET", 86400,
+    ),
+  };
+
   // Persist job row in queued state.
   await c.env.DB.prepare(
     `INSERT INTO jobs (case_id, status, started_at, log_json, manifest_json)
@@ -265,6 +275,7 @@ async function _continueRun(
       vcf_urls: vcfUrls,
       case_put_url: casePutUrl,
       cache_urls: cacheUrls,
+      track_urls: trackUrls,
       callback_url: callbackUrl,
       callback_secret: c.env.ENGINE_WEBHOOK_SECRET,
     }),

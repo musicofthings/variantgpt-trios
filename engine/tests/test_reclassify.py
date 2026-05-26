@@ -6,6 +6,10 @@ from variantgpt_engine.reclassify import reclassify
 
 
 def _vus_with_pm2():
+    """A VUS with a fired PM2 (rare globally) that we expect the SAS
+    reclassification step to retract because IndiGenomes shows the variant
+    is common in Indian samples. gnomad_v4_sas is no longer used by the
+    reclass engine; only Indian-cohort sources count."""
     return Variant(
         id="chr1:100:A:T", chrom="chr1", pos=100, ref="A", alt="T",
         baseline_tier="VUS", baseline_points=1,
@@ -15,8 +19,7 @@ def _vus_with_pm2():
         ],
         populations=[
             PopulationAF(source="gnomad_v4_global", af=0.0),
-            PopulationAF(source="gnomad_v4_sas", af=0.03),  # > BS1 0.01
-            PopulationAF(source="indigenomes", af=0.04),
+            PopulationAF(source="indigenomes", af=0.04),  # > BS1 0.01
         ],
     )
 
@@ -45,8 +48,12 @@ def test_proposal_never_auto_commits():
 
 
 def test_ba1_fires_above_5_percent():
+    """When IndiGen AF exceeds 5% (BA1 threshold), the variant flips Benign."""
     v = _vus_with_pm2()
-    v.populations[1].af = 0.07
+    # Bump IndiGen above the BA1 stand-alone benign threshold.
+    for pop in v.populations:
+        if pop.source == "indigenomes":
+            pop.af = 0.07
     result = reclassify(v, snapshot_versions={})
     assert result is not None
     proposal, _ = result

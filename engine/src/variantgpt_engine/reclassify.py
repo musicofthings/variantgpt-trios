@@ -25,7 +25,14 @@ from .acmg.points import points_for
 from .acmg.thresholds import thresholds_for
 from .models import EvidenceItem, PopulationAF, ReclassProposal, Variant
 
-SAS_SOURCES = ("gnomad_v4_sas", "indigenomes", "genomeasia", "genomeindia")
+# Indian-specific reference populations. gnomAD-SAS is explicitly excluded —
+# it's dominated by Bangladeshi + diaspora samples (~15k individuals) and
+# under-represents pan-Indian sub-populations. We use only datasets built on
+# Indian ancestry samples: IndiGenomes (1029 WGS, IGIB), GenomeAsia 100K
+# (1267 SAS WGS with Indian sub-stratification), and GenomeIndia (10074 WGS,
+# when DAC access is granted). The signal for "common in Indian ancestry"
+# comes only from these.
+SAS_SOURCES = ("indigenomes", "genomeasia", "genomeindia")
 
 
 def reclassify(

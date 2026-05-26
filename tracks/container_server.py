@@ -54,7 +54,7 @@ sys.path.insert(0, str(THIS.parents[1] / "engine" / "src"))
 from variantgpt_engine.pedigree import load_ped  # noqa: E402
 from variantgpt_engine.acmg import classify  # noqa: E402
 from variantgpt_engine.annotation import AnnotationContext, annotate  # noqa: E402
-from variantgpt_engine.annotation_sources import myvariant, vep_rest  # noqa: E402
+from variantgpt_engine.annotation_sources import indigenomes, myvariant, vep_rest  # noqa: E402
 from variantgpt_engine.annotation_sources.csq import pick_canonical  # noqa: E402
 from variantgpt_engine import cache  # noqa: E402
 from variantgpt_engine.build_detect import detect_build  # noqa: E402
@@ -138,6 +138,7 @@ async def _execute_job(job: dict[str, Any]) -> None:
     vcf_urls: dict[str, str] = job["vcf_urls"]
     case_put_url: str = job["case_put_url"]
     cache_urls: dict[str, dict[str, str]] = job.get("cache_urls", {})
+    track_urls: dict[str, str] = job.get("track_urls", {})  # signed GET URLs for reference tracks
     callback_url: str = job["callback_url"]
     secret: str = job["callback_secret"]
 
@@ -261,6 +262,17 @@ async def _execute_job(job: dict[str, Any]) -> None:
             qc = await asyncio.to_thread(compute_qc, joint, pedigree)
             emit("QC done")
             await post_status("running")
+
+            # Pre-warm the IndiGenomes DB. One-time per Fly machine; subsequent
+            # cases reuse the local /tmp copy. The DB is ~500 MB so this takes
+            # ~10-20s on first call. Failures degrade gracefully — IndiGen
+            # lookups return None and the engine continues with gnomAD only.
+            indigen_url = track_urls.get("indigenomes")
+            if indigen_url:
+                emit("IndiGen: ensuring DB available")
+                ok = await indigenomes.ensure_db_downloaded(indigen_url)
+                emit(f"IndiGen: {'ready' if ok else 'unavailable — continuing without'}")
+                await post_status("running")
 
             if real_mode:
                 # ── Stage 1: proband-carrier filter ──

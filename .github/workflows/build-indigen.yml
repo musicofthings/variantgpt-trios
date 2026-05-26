@@ -1,0 +1,54 @@
+name: build-indigen
+
+# One-time (or refresh) IndiGenomes allele-frequency DB build. Manually
+# triggered — clicks "Run workflow" from the Actions tab. The output
+# lands at R2 key:
+#   tracks/indigenomes/v1/indigen.sqlite
+# which the engine reads at startup.
+#
+# Cost: ~10 min runtime, ~500 MB R2 write. Re-run only when IGIB
+# publishes a new IndiGen release.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'R2 version subkey (default: v1)'
+        required: false
+        default: 'v1'
+
+jobs:
+  build:
+    name: Build + upload IndiGen freq DB
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+
+      - name: Build SQLite freq DB from IndiGen VCF
+        run: |
+          mkdir -p /tmp/indigen
+          python tracks/build_indigen_freqs.py \
+            --output /tmp/indigen/indigen.sqlite
+
+      - name: Show output stats
+        run: |
+          ls -lh /tmp/indigen/indigen.sqlite
+          python -c "
+          import sqlite3
+          c = sqlite3.connect('/tmp/indigen/indigen.sqlite')
+          n = c.execute('SELECT COUNT(*) FROM freq').fetchone()[0]
+          print(f'rows: {n:,}')
+          first = c.execute('SELECT chrom, pos, ref, alt, af FROM freq LIMIT 5').fetchall()
+          for r in first: print(' ', r)
+          "
+
+      - name: Upload to R2
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: r2 object put variantgpt/tracks/indigenomes/${{ inputs.version }}/indigen.sqlite --file=/tmp/indigen/indigen.sqlite --remote

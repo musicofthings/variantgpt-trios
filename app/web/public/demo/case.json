@@ -2808,14 +2808,6 @@
       ],
       "af_evidence": [
         {
-          "source": "gnomad_v4_sas",
-          "ac": null,
-          "an": null,
-          "af": 0.0009,
-          "n_hom": null,
-          "n_het": null
-        },
-        {
           "source": "indigenomes",
           "ac": null,
           "an": null,

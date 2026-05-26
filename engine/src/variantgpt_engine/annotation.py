@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
-from .annotation_sources import gnomad
+from .annotation_sources import gnomad, indigenomes
 from .annotation_sources.csq import apply_csq
 from .annotation_sources.tabix_track import TrackConfig, lookup_all as tabix_lookup
 from .joint import JointVariant
@@ -111,6 +111,10 @@ def _population_af(jv: JointVariant, ctx: AnnotationContext) -> list[PopulationA
         out.extend(gnomad.lookup(jv.chrom, jv.pos, jv.ref, jv.alt, timeout=ctx.gnomad_timeout))
     if ctx.tracks:
         out.extend(tabix_lookup(jv.chrom, jv.pos, jv.ref, jv.alt, ctx.tracks))
+    # IndiGenomes — Indian-cohort AF. Sub-ms lookup against the local
+    # SQLite DB (loaded at engine startup). Empty list if DB unavailable
+    # or variant not in IndiGen.
+    out.extend(indigenomes.populations_for(jv.chrom, jv.pos, jv.ref, jv.alt))
     return out
 
 
