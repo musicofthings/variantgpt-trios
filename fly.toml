@@ -39,14 +39,14 @@ primary_region = "iad"          # change to closer region (e.g. "bom" for Mumbai
     soft_limit = 3
 
 [[vm]]
+  # shared-cpu-1x caps at 2 GB. The 1-GB default OOM-killed silently during
+  # the ClinVar overlay on a real WGS input (peak ~1.5 GB with 8k variants
+  # × full annotation + the original 100k joint matrix). 2 GB is the max
+  # for this VM class; for larger inputs we'd need to either move to
+  # shared-cpu-2x (up to 8 GB) or chunk the annotation phase explicitly.
   cpu_kind = "shared"
   cpus = 1
-  # 4 GB — the post-filter set can reach ~10k variants; with full annotation
-  # (CSQ + populations + predictors + ClinVar overlay) each Variant is ~50KB
-  # in pydantic form. Add the original 100k+ JointVariant joint matrix held
-  # before filtering and we peak at ~1.5-2 GB. 1 GB was getting OOM-killed
-  # silently mid-pipeline. 4 GB gives comfortable headroom.
-  memory_mb = 4096
+  memory_mb = 2048
 
 # Auth: the Worker passes a shared bearer in Authorization: Bearer <token>.
 # Set as a Fly secret (not in [env]):
