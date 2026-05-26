@@ -437,6 +437,22 @@ apiRouter.get("/cases/:id", async (c) => {
  * GET /api/cases
  * → list cases visible to this account (active + history).
  */
+/** Temporary debug — list the first ~50 R2 keys under any prefix, so we can
+ *  see why the orphan scan isn't finding files that wrangler reports exist.
+ *  Lists are not sensitive — just paths, no contents. Remove after diagnosis. */
+apiRouter.get("/internal/r2-debug", async (c) => {
+  const prefix = c.req.query("prefix") ?? "";
+  const delimiter = c.req.query("delimiter") ?? undefined;
+  const out = await c.env.BUCKET.list({ prefix, delimiter, limit: 100 });
+  return c.json({
+    prefix, delimiter,
+    objectCount: out.objects.length,
+    objects: out.objects.map((o) => ({ key: o.key, size: o.size })),
+    delimitedPrefixes: out.delimitedPrefixes ?? [],
+    truncated: out.truncated,
+  });
+});
+
 apiRouter.get("/cases", async (c) => {
   // Join jobs + uploads + cases. Keep it simple — caller paginates client-side.
   const rows = await c.env.DB.prepare(
