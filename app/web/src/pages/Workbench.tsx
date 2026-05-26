@@ -129,10 +129,10 @@ export function Workbench() {
           <span className="pill mono">{caseId}</span>
           <span className="pill">{job?.status ?? "checking…"}</span>
           {/* Re-run uses the existing R2 uploads + persisted manifest — no
-              re-upload needed when the user wants to iterate on engine logic. */}
-          {(job?.status === "error" || job?.status === "ready") && caseId ? (
-            <RerunButton caseId={caseId} />
-          ) : null}
+              re-upload needed. Always available so the user can recover
+              from a hung "running" status (e.g. engine died, callback
+              never arrived) without first having to wait for an error. */}
+          {caseId ? <RerunButton caseId={caseId} /> : null}
         </div>
         <RunMonitor caseId={caseId!} status={job} showOpenLink={false} />
         {job?.status === "error" ? (

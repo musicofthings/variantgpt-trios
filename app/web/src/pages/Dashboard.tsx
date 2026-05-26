@@ -169,14 +169,21 @@ export function Dashboard() {
                     <td className="num">{c.memberCount ?? "—"}</td>
                     <td className="num">{c.fileCount ?? "—"}</td>
                     <td>{c.startedAt ? fmtTime(c.startedAt) : "—"}</td>
-                    <td>
+                    <td style={{ display: "flex", gap: 6, alignItems: "center" }}>
                       <Link to={`/cases/${c.caseId}`}>View progress →</Link>
+                      <button
+                        onClick={() => rerunCase(c.caseId)}
+                        disabled={busy === c.caseId}
+                        title="Re-run engine on existing uploads (resets the stuck run)"
+                      >
+                        {busy === c.caseId ? "…" : "Re-run"}
+                      </button>
                       <button
                         onClick={() => deleteCase(c.caseId, c.caseId)}
                         disabled={busy === c.caseId}
                         title="Delete this run + its uploads"
                         aria-label={`Delete ${c.caseId}`}
-                        style={{ marginLeft: 8, color: "var(--rust, #b04a2a)" }}
+                        style={{ color: "var(--rust, #b04a2a)" }}
                       >
                         {busy === c.caseId ? "…" : "Delete"}
                       </button>
@@ -242,15 +249,15 @@ export function Dashboard() {
                       >
                         {busy === c.caseId ? "…" : "Recover"}
                       </button>
-                    ) : (c.status === "error" || c.status === "ready") ? (
+                    ) : (
                       <button
                         onClick={() => rerunCase(c.caseId)}
                         disabled={busy === c.caseId}
-                        title="Re-run engine on existing uploads"
+                        title="Re-run engine on existing uploads (works even if status is stuck on running)"
                       >
                         {busy === c.caseId ? "…" : "Re-run"}
                       </button>
-                    ) : null}
+                    )}
                     <button
                       onClick={() => deleteCase(c.caseId, c.caseId)}
                       disabled={busy === c.caseId}
