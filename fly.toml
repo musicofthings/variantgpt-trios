@@ -41,7 +41,12 @@ primary_region = "iad"          # change to closer region (e.g. "bom" for Mumbai
 [[vm]]
   cpu_kind = "shared"
   cpus = 1
-  memory_mb = 1024              # engine peaks ~400MB on demo trio; bump for WGS
+  # 4 GB — the post-filter set can reach ~10k variants; with full annotation
+  # (CSQ + populations + predictors + ClinVar overlay) each Variant is ~50KB
+  # in pydantic form. Add the original 100k+ JointVariant joint matrix held
+  # before filtering and we peak at ~1.5-2 GB. 1 GB was getting OOM-killed
+  # silently mid-pipeline. 4 GB gives comfortable headroom.
+  memory_mb = 4096
 
 # Auth: the Worker passes a shared bearer in Authorization: Bearer <token>.
 # Set as a Fly secret (not in [env]):
