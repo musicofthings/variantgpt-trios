@@ -28,11 +28,36 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
 
-      - name: Build SQLite freq DB from IndiGen VCF
+      # Download with curl — handles the slow IGIB server far better than
+      # Python urllib's default timeouts. 5 retries, 30-min cap, resume
+      # on partial. The VCF is ~137 MB.
+      - name: Download IndiGen VCF (curl with retries)
         run: |
           mkdir -p /tmp/indigen
+          set -e
+          for i in 1 2 3 4 5; do
+            echo "attempt $i"
+            if curl -fL --retry 3 --retry-delay 10 \
+                 --connect-timeout 60 --max-time 1800 \
+                 --speed-limit 1024 --speed-time 60 \
+                 -C - \
+                 -o /tmp/indigen/IndiGenomes_Variants.vcf.gz \
+                 'https://clingen.igib.res.in/indigen/download/IndiGenomes_Variants.vcf.gz'; then
+              break
+            fi
+            echo "attempt $i failed, retrying in $((i * 30))s..."
+            sleep $((i * 30))
+          done
+          ls -lh /tmp/indigen/IndiGenomes_Variants.vcf.gz
+          # Sanity-check it's actually gzip + has VCF content.
+          zcat /tmp/indigen/IndiGenomes_Variants.vcf.gz | head -3
+
+      - name: Build SQLite freq DB from IndiGen VCF
+        run: |
           python tracks/build_indigen_freqs.py \
-            --output /tmp/indigen/indigen.sqlite
+            --vcf /tmp/indigen/IndiGenomes_Variants.vcf.gz \
+            --output /tmp/indigen/indigen.sqlite \
+            --keep-download
 
       - name: Show output stats
         run: |
