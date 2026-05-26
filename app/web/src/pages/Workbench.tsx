@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { TierChip } from "../components/TierChip";
 import { ReclassBadge } from "../components/ReclassBadge";
 import { EvidenceLedger } from "../components/EvidenceLedger";
@@ -115,11 +115,30 @@ export function Workbench() {
   const { caseId } = useParams<{ caseId: string }>();
   const { data, loading, error } = useDemoCase(caseId);
   const isUploadedCase = !!caseId && caseId !== "demo-trio-001" && caseId !== "demo";
-  // Only poll job-status for uploaded cases that haven't yet produced case.json.
-  const job = useJobStatus(isUploadedCase && !data ? caseId : undefined);
+  // Always poll job-status for uploaded cases. If a re-run is in flight even
+  // though we have stale case.json, we want to surface a live progress banner
+  // and auto-reload when status flips back to ready.
+  const job = useJobStatus(isUploadedCase ? caseId : undefined);
   const showMonitor = isUploadedCase && !data && (job?.status !== "ready" || error);
+  // Live re-run is in progress when a job exists, isn't terminal, AND we DO
+  // have prior case data (otherwise the showMonitor branch covers it).
+  const liveRerun = !!data && job?.status === "running";
+  const liveQueued = !!data && job?.status === "queued";
   const variants: VariantRow[] = data?.variants ?? (error && !isUploadedCase ? FALLBACK_MOCK : []);
   const caseName = data?.caseRow.name ?? (isUploadedCase ? `Case ${caseId}` : "Demo trio (loading…)");
+
+  // When the live re-run flips from running → ready, fetch the fresh case.json.
+  // We can't easily invalidate the useDemoCase cache so we just force a reload.
+  const wasRunning = useRef(false);
+  useEffect(() => {
+    if (job?.status === "running" || job?.status === "queued") {
+      wasRunning.current = true;
+    } else if (wasRunning.current && job?.status === "ready") {
+      wasRunning.current = false;
+      // Hard refresh so the stale case.json + cached useDemoCase get re-pulled.
+      window.location.reload();
+    }
+  }, [job?.status]);
 
   // Selection state — persisted per case so navigating away and back keeps picks.
   const [selectedForReport, setSelectedForReport] = useState<Set<string>>(() => {
@@ -265,6 +284,13 @@ export function Workbench() {
           Generate report{selectedForReport.size > 0 ? ` (${selectedForReport.size})` : ""}
         </button>
       </div>
+
+      {/* Live re-run banner — visible whenever a job is queued/running and
+          we already have a prior case.json on screen. Auto-reloads when
+          the run completes. */}
+      {(liveRerun || liveQueued) ? (
+        <LiveRerunBanner status={job} caseId={caseId!} />
+      ) : null}
 
       <div role="tablist" style={{ display: "flex", gap: 4, marginBottom: 16, flexWrap: "wrap" }}>
         {TABS.map((t) => {
@@ -594,6 +620,73 @@ function fmt(v?: number | null): string {
   if (v === 0) return "0";
   if (v < 1e-4) return v.toExponential(1);
   return v.toFixed(4);
+}
+
+/** Live re-run progress banner. Shown above the variant table while a
+ *  fresh engine job is in flight on a case that already had results.
+ *  The table below stays interactive (you're viewing the previous run);
+ *  when the new run finishes, the page auto-refreshes. */
+function LiveRerunBanner({
+  status, caseId,
+}: { status: import("../components/RunMonitor").JobStatus | null; caseId: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const lastLine = status?.log?.[status.log.length - 1] ?? "starting…";
+  const elapsedSec = Math.floor((status?.elapsedMs ?? 0) / 1000);
+  const elapsedTxt =
+    elapsedSec < 60 ? `${elapsedSec}s`
+    : elapsedSec < 3600 ? `${Math.floor(elapsedSec / 60)}m ${elapsedSec % 60}s`
+    : `${Math.floor(elapsedSec / 3600)}h ${Math.floor((elapsedSec % 3600) / 60)}m`;
+
+  return (
+    <div
+      style={{
+        marginBottom: 12,
+        border: "1px solid var(--accent, #b04a2a)",
+        borderRadius: 6,
+        background: "rgba(180,84,30,0.04)",
+        padding: "10px 14px",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <span style={{
+          display: "inline-block", width: 10, height: 10, borderRadius: "50%",
+          background: "var(--accent, #b04a2a)",
+          animation: "pulse 1.5s infinite",
+        }} />
+        <strong>Re-run in progress</strong>
+        <span className="pill mono">{status?.status ?? "queued"}</span>
+        <span className="mono" style={{ color: "var(--ink-soft)", fontSize: 12 }}>
+          {elapsedTxt} elapsed
+        </span>
+        <span style={{ flex: 1, color: "var(--ink-soft)", fontSize: 13, fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {lastLine}
+        </span>
+        <button onClick={() => setExpanded((e) => !e)}>
+          {expanded ? "Hide log ▾" : "Show log ▸"}
+        </button>
+      </div>
+      {expanded ? (
+        <pre
+          className="mono"
+          style={{
+            marginTop: 10, marginBottom: 0, padding: 10,
+            background: "var(--paper-soft, #f6f1e6)",
+            borderRadius: 4, fontSize: 12, lineHeight: 1.5,
+            maxHeight: 280, overflowY: "auto",
+          }}
+        >
+          {status?.log?.length ? status.log.join("\n") : "Waiting for engine output…"}
+        </pre>
+      ) : null}
+      <div style={{ marginTop: 6, fontSize: 12, color: "var(--ink-soft)" }}>
+        Viewing the previous run's results below. The table will refresh
+        automatically when the new run completes — or you can{" "}
+        <a href={`/cases/${caseId}`} onClick={(e) => { e.preventDefault(); window.location.reload(); }}>
+          refresh manually
+        </a>.
+      </div>
+    </div>
+  );
 }
 
 /** Sortable column header. Click toggles direction; clicking a different
