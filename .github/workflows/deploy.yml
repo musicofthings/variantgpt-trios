@@ -89,14 +89,8 @@ jobs:
     name: Deploy Worker (Cloudflare)
     runs-on: ubuntu-latest
     needs: [changes, engine]
-    # Run if API changed, OR engine deployed successfully (so a fresh engine
-    # URL propagates), OR manual dispatch. always() lets us run even if engine
-    # was skipped.
-    if: |
-      always() &&
-      (needs.changes.outputs.api == 'true' ||
-       needs.engine.result == 'success' ||
-       github.event_name == 'workflow_dispatch')
+    # always() lets us run even if engine was skipped (no relevant changes).
+    if: ${{ always() && (needs.changes.outputs.api == 'true' || needs.engine.result == 'success' || github.event_name == 'workflow_dispatch') }}
     defaults: { run: { working-directory: app/api } }
     steps:
       - uses: actions/checkout@v4
@@ -115,11 +109,7 @@ jobs:
     name: Deploy SPA (Cloudflare Pages)
     runs-on: ubuntu-latest
     needs: [changes, api]
-    if: |
-      always() &&
-      (needs.changes.outputs.web == 'true' ||
-       needs.api.result == 'success' ||
-       github.event_name == 'workflow_dispatch')
+    if: ${{ always() && (needs.changes.outputs.web == 'true' || needs.api.result == 'success' || github.event_name == 'workflow_dispatch') }}
     defaults: { run: { working-directory: app/web } }
     env:
       VITE_API_BASE: https://variantgpt-api.shibi-kannan.workers.dev
