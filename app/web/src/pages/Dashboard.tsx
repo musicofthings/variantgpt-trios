@@ -13,6 +13,8 @@ interface CaseListItem {
   missingCount?: number;
   error?: string;
   hasResult: boolean;
+  /** True when this case exists in R2 but its D1 row was wiped. */
+  orphan?: boolean;
 }
 
 export function Dashboard() {
@@ -34,6 +36,22 @@ export function Dashboard() {
       setRefreshTick((t) => t + 1);
     } catch (e) {
       setError(`Delete failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function recoverCase(caseId: string) {
+    if (!confirm(`Recover ${caseId}?\n\nRebuilds the database rows from the R2 uploads. After recovery you'll need to re-open the case and re-enter the pedigree + click Run.`)) return;
+    setBusy(caseId); setError(null); setNotice(null);
+    try {
+      const r = await fetch(api(`/cases/${caseId}/recover`), { method: "POST" });
+      const j: { ok?: boolean; role_count?: number; files?: string[]; error?: string } = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok) throw new Error(j.error ?? `status ${r.status}`);
+      setNotice(`Recovered ${caseId}: ${j.role_count} files (${(j.files ?? []).join(", ")}). Open the case and click Run to start analysis.`);
+      setRefreshTick((t) => t + 1);
+    } catch (e) {
+      setError(`Recover failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setBusy(null);
     }
@@ -201,14 +219,30 @@ export function Dashboard() {
                 </tr>
               ) : null}
               {history.map((c) => (
-                <tr key={c.caseId}>
-                  <td><Link to={`/cases/${c.caseId}`} className="mono">{c.caseId}</Link></td>
+                <tr key={c.caseId} style={c.orphan ? { background: "var(--paper-soft, #f6f1e6)" } : undefined}>
+                  <td>
+                    <Link to={`/cases/${c.caseId}`} className="mono">{c.caseId}</Link>
+                    {c.orphan ? (
+                      <span title="VCFs still in R2 but database row is gone — Recover rebuilds the DB rows from R2"
+                            style={{ marginLeft: 8, fontSize: 11, color: "var(--rust, #b04a2a)" }}>
+                        orphan
+                      </span>
+                    ) : null}
+                  </td>
                   <td><RunStatusPill status={c.status} /></td>
                   <td className="num">{c.memberCount ?? "—"}</td>
                   <td className="num">{c.fileCount ?? "—"}</td>
                   <td>{c.finishedAt ? fmtTime(c.finishedAt) : c.hasResult ? "—" : "—"}</td>
                   <td style={{ display: "flex", gap: 6 }}>
-                    {(c.status === "error" || c.status === "ready") ? (
+                    {c.orphan ? (
+                      <button
+                        onClick={() => recoverCase(c.caseId)}
+                        disabled={busy === c.caseId}
+                        title="Rebuild DB rows from R2 uploads"
+                      >
+                        {busy === c.caseId ? "…" : "Recover"}
+                      </button>
+                    ) : (c.status === "error" || c.status === "ready") ? (
                       <button
                         onClick={() => rerunCase(c.caseId)}
                         disabled={busy === c.caseId}

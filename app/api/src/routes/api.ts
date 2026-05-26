@@ -482,8 +482,55 @@ apiRouter.get("/cases", async (c) => {
       memberCount,
       missingCount,
       hasResult: r.status === "ready",
+      orphan: false,
     };
   });
+
+  // Also surface R2-only orphans: cases whose VCFs are still in R2 but whose
+  // D1 row was deleted (e.g. a Delete that didn't purge R2, or a manual D1
+  // wipe). These are recoverable — the user can either delete the R2 objects
+  // or rebuild the case row from them.
+  const knownIds = new Set(cases.map((c) => c.caseId));
+  try {
+    let cursor: string | undefined;
+    const orphanFiles: Record<string, string[]> = {};
+    do {
+      const page = await c.env.BUCKET.list({ prefix: "cases/", cursor, limit: 1000, delimiter: "/" });
+      // R2 list with delimiter returns common prefixes (each case dir) in `delimitedPrefixes`.
+      for (const prefix of page.delimitedPrefixes ?? []) {
+        const id = prefix.replace(/^cases\//, "").replace(/\/$/, "");
+        if (!id || knownIds.has(id)) continue;
+        orphanFiles[id] = [];
+      }
+      cursor = page.truncated ? page.cursor : undefined;
+    } while (cursor);
+
+    // For each orphan directory, list the actual objects to count files.
+    for (const id of Object.keys(orphanFiles)) {
+      const inner = await c.env.BUCKET.list({ prefix: `cases/${id}/uploads/`, limit: 20 });
+      orphanFiles[id] = inner.objects.map((o) => o.key);
+    }
+
+    for (const [id, keys] of Object.entries(orphanFiles)) {
+      const hasResult = (await c.env.BUCKET.head(`cases/${id}/case.json`).catch(() => null)) !== null;
+      cases.push({
+        caseId: id,
+        status: hasResult ? "ready" : "unknown",
+        startedAt: undefined,
+        finishedAt: undefined,
+        error: undefined,
+        fileCount: keys.length,
+        memberCount: undefined,
+        missingCount: undefined,
+        hasResult,
+        orphan: true,
+      });
+    }
+  } catch (e) {
+    // R2 scan is best-effort; never let it block the cases endpoint.
+    console.error("orphan scan failed:", e);
+  }
+
   return c.json({ cases });
 });
 
@@ -524,6 +571,55 @@ apiRouter.delete("/cases/:id", async (c) => {
   await c.env.DB.prepare(`DELETE FROM uploads WHERE case_id = ?`).bind(id).run();
 
   return c.json({ ok: true, r2Purged });
+});
+
+/**
+ * POST /api/cases/:id/recover
+ *
+ * Rebuild D1 rows (cases + uploads) for a case whose VCFs are still in R2 but
+ * whose D1 state was wiped (e.g. after a Delete that didn't purge R2, or a
+ * D1 migration). Doesn't re-create the manifest (pedigree/HPO are lost), so
+ * after recovery the user must navigate to `/cases/<id>` and fill in the
+ * pedigree + click Run again — but the VCFs don't need re-uploading.
+ *
+ * Returns { ok, role_count, files: [role,...] }
+ */
+apiRouter.post("/cases/:id/recover", async (c) => {
+  const id = sanitize(c.req.param("id"));
+  if (!id) return c.json({ error: "bad caseId" }, 400);
+
+  // Inventory the R2 directory.
+  const inner = await c.env.BUCKET.list({ prefix: `cases/${id}/uploads/`, limit: 100 });
+  if (inner.objects.length === 0) {
+    return c.json({ error: "no uploads in R2 for this caseId" }, 404);
+  }
+
+  const roles: { role: string; r2_key: string; filename: string }[] = [];
+  for (const obj of inner.objects) {
+    // key shape: cases/<id>/uploads/<role>.<ext>
+    const fname = obj.key.split("/").pop() ?? "";
+    const role = fname.split(".")[0];
+    if (!role || !ALLOWED_ROLES.has(role)) continue;
+    roles.push({ role, r2_key: obj.key, filename: fname });
+  }
+  if (roles.length === 0) {
+    return c.json({ error: "no valid role files found (expected proband/father/mother)" }, 400);
+  }
+
+  // Rebuild the cases row (idempotent).
+  await c.env.DB.prepare(
+    `INSERT INTO cases (id, name, status) VALUES (?, ?, 'draft')
+     ON CONFLICT(id) DO NOTHING`,
+  ).bind(id, `Recovered ${id}`).run();
+  // Rebuild the uploads rows.
+  for (const r of roles) {
+    await c.env.DB.prepare(
+      `INSERT INTO uploads (case_id, role, r2_key, filename, uploaded_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(case_id, role) DO UPDATE SET r2_key=excluded.r2_key`,
+    ).bind(id, r.role, r.r2_key, r.filename, Date.now()).run();
+  }
+  return c.json({ ok: true, role_count: roles.length, files: roles.map((r) => r.role) });
 });
 
 /**
