@@ -407,21 +407,17 @@ async def _execute_job(job: dict[str, Any]) -> None:
                         f"{vep_rest.BATCH_SIZE}/batch)"
                     )
                     last_prog = [0]
-                    save_threshold = [0]  # save cache every N batches
 
                     def vep_progress(done: int, total: int) -> None:
+                        # Lightweight: only log + post_status, no fire-and-forget
+                        # cache saves (those were holding refs to `joint` and
+                        # adding GC pressure that contributed to downstream OOM).
+                        # Cache save happens once at end of stage.
                         if done == total or (done - last_prog[0]) >= max(1, total // 10):
                             last_prog[0] = done
                             log.append(f"  VEP REST: {done}/{total} batches done")
                             loop = asyncio.get_event_loop()
                             loop.create_task(post_status("running"))
-                        # Save cache every 10 batches (≈ every 2000 variants) so
-                        # a mid-stage crash preserves most of the work.
-                        if (done - save_threshold[0]) >= 10 or done == total:
-                            save_threshold[0] = done
-                            if cache_urls.get("csq", {}).get("put"):
-                                loop = asyncio.get_event_loop()
-                                loop.create_task(cache.save_csq(cache_urls["csq"]["put"], joint))
 
                     filled = await vep_rest.annotate_batch_async(
                         joint, progress=vep_progress,
@@ -447,48 +443,95 @@ async def _execute_job(job: dict[str, Any]) -> None:
             )
 
             # Do the entire annotate→classify→priority sweep in a single
-            # worker thread. The previous per-variant await was paying the
-            # full event-loop context-switch cost N times (~50ms each) — at
-            # WGS scale that turns minutes of work into hours.
+            # worker thread per chunk (see chunked loop below).
             hpo_ids = manifest.get("hpo", [])
 
-            def _annotate_classify_all() -> list[Variant]:
-                out: list[Variant] = []
-                for jv in joint:
-                    models, conf = assign_models(jv, pedigree)
-                    v = annotate(jv, ctx)
-                    v.inheritance_models = models
-                    v.inheritance_confidence = conf  # type: ignore[assignment]
-                    out.append(v)
-                # Compound-het pass needs gene assignment from annotation.
-                addl = compound_het_pass(
-                    [(jv, vv.gene) for jv, vv in zip(joint, out)], pedigree,
-                )
-                for vv, jv in zip(out, joint):
-                    if jv.key in addl:
-                        vv.inheritance_models = list(dict.fromkeys(vv.inheritance_models + addl[jv.key]))
-                for vv in out:
-                    tier, points, ledger = classify(vv)
-                    vv.baseline_tier = tier
-                    vv.baseline_points = points
-                    vv.evidence = ledger
-                    priority(vv, hpo_ids)
-                return out
-
-            # Checkpoint: try the variants cache. If hit, skip annotate+classify.
-            cached_variants = None
+            # Checkpoint: load any previously-classified variants from cache,
+            # then process the remainder in chunks. Each chunk is 500 variants
+            # (~25 MB peak as pydantic objects). After each chunk we update
+            # the cache and gc.collect — so a mid-stage OOM at variant 5000
+            # of 8454 means a rerun resumes from variant 5000, not 0.
+            #
+            # Compound-het detection runs at the very end across all
+            # variants (it's a global pass; doing it per-chunk would miss
+            # trans pairs that span chunks).
+            ANNOTATE_CHUNK = 500
+            existing_variants: dict[str, Variant] = {}
             if real_mode and cache_urls.get("variants", {}).get("get"):
                 cached_variants = await cache.load_variants(cache_urls["variants"]["get"])
-            if cached_variants is not None:
-                variants: list[Variant] = cached_variants
-                emit(f"annotate+classify: cache HIT ({len(variants)} variants restored)")
+                if cached_variants:
+                    existing_variants = {v.id: v for v in cached_variants}
+                    emit(f"annotate+classify: cache loaded ({len(existing_variants)} variants from prior run)")
+
+            def _vid(jv) -> str:
+                return f"{jv.chrom}:{jv.pos}:{jv.ref}:{jv.alt}"
+
+            remaining = [jv for jv in joint if _vid(jv) not in existing_variants]
+            variants: list[Variant] = list(existing_variants.values())
+
+            if not remaining:
+                emit(f"annotate+classify: all {len(variants)} variants already cached")
             else:
-                emit(f"annotating + classifying {len(joint)} variants")
-                variants = await asyncio.to_thread(_annotate_classify_all)
-                emit("annotation + classification done")
-                if real_mode and cache_urls.get("variants", {}).get("put"):
-                    saved = await cache.save_variants(cache_urls["variants"]["put"], variants)
-                    emit(f"annotate+classify: cache {'saved' if saved else 'save FAILED'}")
+                emit(
+                    f"annotate+classify: {len(remaining)} variants to process "
+                    f"({len(existing_variants)} already cached, chunks of {ANNOTATE_CHUNK})"
+                )
+
+                def _annotate_classify_chunk(sub: list) -> list[Variant]:
+                    """Annotate + classify one chunk. compound_het_pass is
+                    NOT run here — it's deferred to a global pass after all
+                    chunks complete, since it needs cross-chunk gene pairing."""
+                    out_chunk: list[Variant] = []
+                    for jv in sub:
+                        models, conf = assign_models(jv, pedigree)
+                        v = annotate(jv, ctx)
+                        v.inheritance_models = models
+                        v.inheritance_confidence = conf  # type: ignore[assignment]
+                        tier, points, ledger = classify(v)
+                        v.baseline_tier = tier
+                        v.baseline_points = points
+                        v.evidence = ledger
+                        priority(v, hpo_ids)
+                        out_chunk.append(v)
+                    return out_chunk
+
+                chunks_an = [remaining[i:i + ANNOTATE_CHUNK]
+                             for i in range(0, len(remaining), ANNOTATE_CHUNK)]
+                for idx, sub in enumerate(chunks_an, start=1):
+                    chunk_start = time.time()
+                    sub_variants = await asyncio.to_thread(_annotate_classify_chunk, sub)
+                    variants.extend(sub_variants)
+                    saved = True
+                    if real_mode and cache_urls.get("variants", {}).get("put"):
+                        saved = await cache.save_variants(cache_urls["variants"]["put"], variants)
+                    elapsed_ms = int((time.time() - chunk_start) * 1000)
+                    emit(
+                        f"  annotate+classify chunk {idx}/{len(chunks_an)}: "
+                        f"+{len(sub_variants)} variants (total {len(variants)}, {elapsed_ms}ms)"
+                        f"{'' if saved else ' [cache save FAILED]'}"
+                    )
+                    await post_status("running")
+                    gc.collect()
+
+                # Global compound-het pass across all variants (post-classify
+                # update needed for any newly-found compound hets).
+                if joint:
+                    emit("compound-het: global pass")
+                    addl = await asyncio.to_thread(
+                        compound_het_pass,
+                        [(jv, v.gene) for jv, v in zip(joint, variants)],
+                        pedigree,
+                    )
+                    if addl:
+                        for v, jv in zip(variants, joint):
+                            if jv.key in addl:
+                                v.inheritance_models = list(dict.fromkeys(
+                                    v.inheritance_models + addl[jv.key]
+                                ))
+                        # Re-save the cache to capture comp_het updates.
+                        if real_mode and cache_urls.get("variants", {}).get("put"):
+                            await cache.save_variants(cache_urls["variants"]["put"], variants)
+                    emit(f"compound-het: {sum(len(v) for v in addl.values())} new model assignments")
             gc.collect()
             await post_status("running")
 
