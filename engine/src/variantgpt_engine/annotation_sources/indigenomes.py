@@ -89,20 +89,45 @@ def _normalize_chrom(chrom: str) -> str:
 
 async def fetch_gene(
     client: httpx.AsyncClient, gene: str,
+    *, debug_capture: Optional[list] = None,
 ) -> dict[tuple[str, int, str, str], dict]:
-    """POST a gene query, return (chrom,pos,ref,alt) → {ac,an,af}."""
+    """POST a gene query, return (chrom,pos,ref,alt) → {ac,an,af}.
+
+    debug_capture (if provided) is a list we append per-gene diagnostics
+    to so the caller can surface the first few responses to the engine log.
+    """
     out: dict[tuple[str, int, str, str], dict] = {}
+    err: Optional[str] = None
+    body_preview = ""
     try:
         resp = await client.post(
             INDIGEN_API,
             json={"Name": gene},
         )
+        body_preview = (resp.text or "")[:120]
         resp.raise_for_status()
         data = resp.json()
-    except (httpx.HTTPError, ValueError) as e:
-        log.debug("IndiGen gene fetch failed for %s: %s", gene, e)
+    except httpx.HTTPError as e:
+        err = f"http: {type(e).__name__}: {e}"
+    except ValueError as e:
+        err = f"parse: {e}"
+    except Exception as e:  # noqa: BLE001
+        err = f"{type(e).__name__}: {e}"
+
+    if err:
+        if debug_capture is not None and len(debug_capture) < 5:
+            debug_capture.append(f"gene={gene} ERR {err} body[:120]={body_preview!r}")
+        log.warning("IndiGen gene fetch failed for %s: %s", gene, err)
         return out
-    for rec in data.get("mydata", []) or []:
+
+    records = data.get("mydata", []) if isinstance(data, dict) else None
+    if debug_capture is not None and len(debug_capture) < 5:
+        debug_capture.append(
+            f"gene={gene} records={len(records) if records is not None else 'None'} "
+            f"first_keys={list((records[0] if records else {}).keys())[:6]}"
+        )
+
+    for rec in records or []:
         chrom = _normalize_chrom(str(rec.get("Chr") or rec.get("Chr_VCF") or ""))
         pos_raw = rec.get("Start") or rec.get("Start_VCF")
         ref = rec.get("Ref") or rec.get("Ref_VCF")
@@ -171,15 +196,22 @@ async def fetch_for_variants_async(
     lock = asyncio.Lock()
     sem = asyncio.Semaphore(MAX_CONCURRENT)
     merged: dict[tuple[str, int, str, str], dict] = {}
+    debug_capture: list[str] = []   # first 5 per-gene diagnostics surfaced to engine log
 
     async with httpx.AsyncClient(
         timeout=PER_BATCH_TIMEOUT,
-        headers={"User-Agent": "variantgpt-engine/0.1"},
+        # Match a regular browser fingerprint — IGIB may filter by UA.
+        headers={
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "Referer": "https://clingen.igib.res.in/indigen/",
+            "Origin": "https://clingen.igib.res.in",
+        },
     ) as client:
         async def one(gene: str) -> None:
             nonlocal done
             async with sem:
-                gene_map = await fetch_gene(client, gene)
+                gene_map = await fetch_gene(client, gene, debug_capture=debug_capture)
             async with lock:
                 merged.update(gene_map)
                 done += 1
@@ -187,6 +219,13 @@ async def fetch_for_variants_async(
                     progress(done, total)
 
         await asyncio.gather(*(one(g) for g in genes))
+
+    # Surface the first few raw responses so the engine log shows what
+    # we're actually getting back from IGIB.
+    for line in debug_capture:
+        log.info("IndiGen debug: %s", line)
+    # Stash on the function for the caller to log.
+    fetch_for_variants_async.last_debug = debug_capture  # type: ignore[attr-defined]
     return merged
 
 

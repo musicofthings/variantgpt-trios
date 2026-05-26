@@ -594,6 +594,12 @@ async def _execute_job(job: dict[str, Any]) -> None:
                     )
                     indi_hits = indigenomes.apply_indigen_to_variants(variants, indi_map)
                     emit(f"IndiGen: {indi_hits} variants annotated from {len(indi_map)} unique IndiGen records")
+                    # Echo the first few API responses to the engine log so we
+                    # can see whether IGIB is returning data, empty, or errors.
+                    last_dbg = getattr(indigenomes.fetch_for_variants_async, "last_debug", None)
+                    if last_dbg:
+                        for line in last_dbg[:5]:
+                            emit(f"  IndiGen debug: {line}")
                 except Exception as e:  # noqa: BLE001
                     emit(f"IndiGen: lookup failed (continuing without): {type(e).__name__}: {e}")
                 await post_status("running")
