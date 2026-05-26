@@ -274,15 +274,30 @@ async def annotate_variants_async(
                     if not pair:
                         continue
                     _, v = pair
-                    cv = _project_clinvar(entry.get("clinvar"))
+                    # Wrap each projection: a malformed entry from myvariant.info
+                    # (unexpected int where str expected, missing required fields,
+                    # etc.) shouldn't take down the whole batch.
+                    try:
+                        cv = _project_clinvar(entry.get("clinvar"))
+                    except Exception as e:  # noqa: BLE001
+                        log.debug("clinvar projection failed for %s: %s", vid, e)
+                        cv = None
                     if cv:
                         v.clinvar = cv
                         local += 1
-                    pops = _project_gnomad(entry.get("gnomad_exome"), entry.get("gnomad_genome"))
+                    try:
+                        pops = _project_gnomad(entry.get("gnomad_exome"), entry.get("gnomad_genome"))
+                    except Exception as e:  # noqa: BLE001
+                        log.debug("gnomad projection failed for %s: %s", vid, e)
+                        pops = []
                     if pops:
                         v.populations = pops
                         local += 1
-                    preds = _project_dbnsfp(entry.get("dbnsfp"))
+                    try:
+                        preds = _project_dbnsfp(entry.get("dbnsfp"))
+                    except Exception as e:  # noqa: BLE001
+                        log.debug("dbnsfp projection failed for %s: %s", vid, e)
+                        preds = None
                     if preds:
                         cur = v.predictors
                         merged = PredictorScores(
@@ -438,14 +453,36 @@ def _project_clinvar(raw) -> Optional[ClinVarRecord]:
             for c in cond:
                 if isinstance(c, dict) and c.get("name") and c["name"] not in conditions:
                     conditions.append(c["name"])
+    def _to_str(v) -> Optional[str]:
+        if v is None:
+            return None
+        if isinstance(v, str):
+            return v or None
+        # myvariant.info sometimes returns variant_id as int (e.g. 729893).
+        return str(v)
+
+    def _to_str_or_none(v) -> Optional[str]:
+        if v is None:
+            return None
+        if isinstance(v, str):
+            return v or None
+        if isinstance(v, list):
+            # Take the first string we can find.
+            for item in v:
+                s = _to_str_or_none(item)
+                if s:
+                    return s
+            return None
+        return str(v)
+
     return ClinVarRecord(
         rcv_count=len(rcv_list),
-        clinical_significance=primary.get("clinical_significance"),
-        review_status=primary.get("review_status"),
-        review_stars=_stars(primary.get("review_status")),
-        last_evaluated=primary.get("last_evaluated"),
-        conditions=conditions[:5],          # cap UI noise
-        variation_id=raw.get("variant_id") or primary.get("accession"),
+        clinical_significance=_to_str_or_none(primary.get("clinical_significance")),
+        review_status=_to_str_or_none(primary.get("review_status")),
+        review_stars=_stars(_to_str_or_none(primary.get("review_status"))),
+        last_evaluated=_to_str_or_none(primary.get("last_evaluated")),
+        conditions=[c for c in conditions[:5] if c],   # cap UI noise
+        variation_id=_to_str(raw.get("variant_id")) or _to_str(primary.get("accession")),
     )
 
 

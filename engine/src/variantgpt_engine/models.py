@@ -114,7 +114,16 @@ Tier = Literal["P", "LP", "VUS", "LB", "B"]
 
 
 class ClinVarRecord(BaseModel):
-    """ClinVar classification overlay for a single variant."""
+    """ClinVar classification overlay for a single variant.
+
+    `model_config = {"coerce_numbers_to_str": True}` is a defensive measure —
+    myvariant.info occasionally returns numeric values where strings are
+    expected (e.g. variant_id as int), and we'd rather coerce than crash
+    the entire batch. The projection code already does explicit coercion,
+    but this is belt-and-suspenders for future drift.
+    """
+    model_config = {"coerce_numbers_to_str": True}
+
     rcv_count: Optional[int] = None                    # number of submitter records
     clinical_significance: Optional[str] = None        # "Pathogenic", "Benign", "Conflicting interpretations of pathogenicity", ...
     review_status: Optional[str] = None                # "criteria provided, single submitter" | "...multiple submitters, no conflicts" | "reviewed by expert panel" | "practice guideline"
