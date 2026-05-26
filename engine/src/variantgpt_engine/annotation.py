@@ -111,10 +111,9 @@ def _population_af(jv: JointVariant, ctx: AnnotationContext) -> list[PopulationA
         out.extend(gnomad.lookup(jv.chrom, jv.pos, jv.ref, jv.alt, timeout=ctx.gnomad_timeout))
     if ctx.tracks:
         out.extend(tabix_lookup(jv.chrom, jv.pos, jv.ref, jv.alt, ctx.tracks))
-    # IndiGenomes — Indian-cohort AF. Sub-ms lookup against the local
-    # SQLite DB (loaded at engine startup). Empty list if DB unavailable
-    # or variant not in IndiGen.
-    out.extend(indigenomes.populations_for(jv.chrom, jv.pos, jv.ref, jv.alt))
+    # IndiGenomes is filled in a separate bulk pass (annotation_sources/
+    # indigenomes.fetch_for_variants_async) after gene assignment — the IGIB
+    # API is gene-keyed, so per-variant lookups here would be wildly slow.
     return out
 
 

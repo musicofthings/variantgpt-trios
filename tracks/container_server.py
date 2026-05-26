@@ -263,16 +263,11 @@ async def _execute_job(job: dict[str, Any]) -> None:
             emit("QC done")
             await post_status("running")
 
-            # Pre-warm the IndiGenomes DB. One-time per Fly machine; subsequent
-            # cases reuse the local /tmp copy. The DB is ~500 MB so this takes
-            # ~10-20s on first call. Failures degrade gracefully — IndiGen
-            # lookups return None and the engine continues with gnomAD only.
-            indigen_url = track_urls.get("indigenomes")
-            if indigen_url:
-                emit("IndiGen: ensuring DB available")
-                ok = await indigenomes.ensure_db_downloaded(indigen_url)
-                emit(f"IndiGen: {'ready' if ok else 'unavailable — continuing without'}")
-                await post_status("running")
+            # IndiGen integration moved to a live API client (clingen.igib.res.in
+            # data.php). The bulk VCF has only variant sites with no AF, so we
+            # can't pre-build a freq DB. Live lookup happens after annotation
+            # (we batch by gene name, which the API supports). See the IndiGen
+            # block below the ClinVar overlay.
 
             if real_mode:
                 # ── Stage 1: proband-carrier filter ──
@@ -573,7 +568,33 @@ async def _execute_job(job: dict[str, Any]) -> None:
                 emit(f"myvariant.info: filled={filled} clinvar_records={clinvar_count}")
                 await post_status("running")
 
-            emit("reclassifying (South Asian)")
+            # IndiGenomes (live API): query data.php by gene name, build a
+            # per-case (chrom,pos,ref,alt) → AF map, attach indigenomes
+            # PopulationAF rows. This is what the SAS reclassification reads
+            # to fire BS1 on Indian-cohort common variants.
+            if real_mode and variants:
+                last_indi = [0]
+
+                def indi_progress(done: int, total: int) -> None:
+                    if done == total or (done - last_indi[0]) >= max(1, total // 10):
+                        last_indi[0] = done
+                        log.append(f"  IndiGen: {done}/{total} genes queried")
+                        loop = asyncio.get_event_loop()
+                        loop.create_task(post_status("running"))
+
+                emit(f"IndiGen: gene-batched API for {len(variants)} variants "
+                     f"({indigenomes.MAX_CONCURRENT}-way concurrent)")
+                try:
+                    indi_map = await indigenomes.fetch_for_variants_async(
+                        variants, progress=indi_progress,
+                    )
+                    indi_hits = indigenomes.apply_indigen_to_variants(variants, indi_map)
+                    emit(f"IndiGen: {indi_hits} variants annotated from {len(indi_map)} unique IndiGen records")
+                except Exception as e:  # noqa: BLE001
+                    emit(f"IndiGen: lookup failed (continuing without): {type(e).__name__}: {e}")
+                await post_status("running")
+
+            emit("reclassifying (Indian-cohort baseline)")
             proposals = await asyncio.to_thread(
                 reclassify_all, variants, snapshot_versions=track_versions
             )

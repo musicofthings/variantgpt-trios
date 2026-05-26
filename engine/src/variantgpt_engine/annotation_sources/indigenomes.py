@@ -1,153 +1,205 @@
-"""IndiGenomes (IGIB) allele-frequency lookup.
+"""IndiGenomes (IGIB) allele-frequency lookup — live API client.
 
-Cohort: 1,029 unrelated Indian whole genomes from the IGIB IndiGen project.
+Cohort: 1,029 unrelated Indian whole genomes (IGIB IndiGen project).
 Source: https://clingen.igib.res.in/indigen/
 
-The full IndiGen VCF (~137 MB compressed, ~55M variants) is pre-processed
-into a compact SQLite DB by tracks/build_indigen_freqs.py and hosted on R2
-at the key advertised in INDIGEN_R2_KEY below.
+Why live API (not bulk download):
+  The public IndiGenomes_Variants.vcf.gz contains only variant sites with
+  variation type — no allele counts. The actual AC/AN/AF data lives in
+  IGIB's MongoDB backend, accessible via POST /indigen/data.php with
+  {"Name": "<gene name>"} returning all variants in that gene.
 
-At engine startup we download the DB once to /tmp and reuse it for the
-machine's lifetime. Per-variant lookups are sub-millisecond (B-tree index
-on (chrom, pos, ref, alt)).
+Strategy:
+  After per-variant annotation has assigned a gene to each surviving
+  variant, we batch-query the API by unique gene name. Each gene response
+  carries hundreds of variants with full INFO strings — we parse AC/AF/AN
+  out of `Info` and build a local (chrom,pos,ref,alt) → AF map for the
+  case. ~2000 unique genes per typical case × 200ms each × 10-way
+  concurrency ≈ ~40s wall clock.
 
-If the DB isn't present (or the download fails), IndiGen lookups return None
-gracefully — the pipeline degrades to gnomAD + ClinVar only.
+Result: every variant in a known gene gets a real IndiGen AF (or
+explicit None if IndiGen has no record for that exact alt). Variants
+without a gene assignment skip IndiGen.
+
+Failures (network, parse, etc.) degrade silently — return empty maps.
+The reclassification engine handles missing IndiGen AF gracefully (no
+firing of BS1 from IndiGen for that variant).
 """
 from __future__ import annotations
 
+import asyncio
 import logging
-import os
-import sqlite3
-import time
-from pathlib import Path
-from typing import Iterable, Optional
+import re
+from typing import Callable, Iterable, Optional
 
 import httpx
 
-from ..models import PopulationAF
+from ..joint import JointVariant
+from ..models import PopulationAF, Variant
 
 log = logging.getLogger(__name__)
 
-# Local cache path (inside the Fly machine's /tmp).
-LOCAL_DB = Path(os.environ.get("INDIGEN_DB_PATH", "/tmp/variantgpt/indigen.sqlite"))
-# R2 key — the Worker mints a signed GET URL the engine fetches at startup.
-INDIGEN_R2_KEY_DEFAULT = "tracks/indigenomes/v1/indigen.sqlite"
+INDIGEN_API = "https://clingen.igib.res.in/indigen/data.php"
+MAX_CONCURRENT = 8
+PER_BATCH_TIMEOUT = 30.0
+
+# Parse the AC/AN/AF tokens from the IndiGen MongoDB `Info` string, e.g.
+#   "AC=86;AF=0.042;AN=2050;DP=24889;FS=0.517;..."
+_INFO_AC = re.compile(r"(?:^|;)AC=([0-9.,]+)")
+_INFO_AN = re.compile(r"(?:^|;)AN=([0-9.]+)")
+_INFO_AF = re.compile(r"(?:^|;)AF=([0-9.,]+)")
 
 
-class IndiGenDB:
-    """Wraps the SQLite freq DB with a lookup interface. Thread-safe for read."""
+def _parse_info_af(info: str, target_alt: Optional[str] = None) -> Optional[dict]:
+    """Extract {ac, an, af} from a single IndiGen record's Info string.
 
-    def __init__(self, db_path: Path):
-        self.path = db_path
-        # check_same_thread=False — we want the same connection across
-        # asyncio tasks; sqlite3 is fine with concurrent reads.
-        self.conn = sqlite3.connect(str(db_path), check_same_thread=False)
-        self.conn.execute("PRAGMA query_only = ON")
-        self.conn.row_factory = sqlite3.Row
-
-    def lookup(self, chrom: str, pos: int, ref: str, alt: str) -> Optional[dict]:
-        """Return {ac, an, af, n_hom} or None if the variant isn't in IndiGen."""
-        c = self._normalize_chrom(chrom)
-        row = self.conn.execute(
-            "SELECT ac, an, af, n_hom FROM freq "
-            "WHERE chrom = ? AND pos = ? AND ref = ? AND alt = ? LIMIT 1",
-            (c, pos, ref, alt),
-        ).fetchone()
-        if row is None:
-            return None
-        return {"ac": row["ac"], "an": row["an"], "af": row["af"], "n_hom": row["n_hom"]}
-
-    def lookup_many(self, keys: Iterable[tuple[str, int, str, str]]) -> dict[tuple, dict]:
-        """Bulk lookup. Returns a dict keyed by (chrom, pos, ref, alt)."""
-        out: dict[tuple, dict] = {}
-        for key in keys:
-            res = self.lookup(*key)
-            if res:
-                out[key] = res
-        return out
-
-    @staticmethod
-    def _normalize_chrom(chrom: str) -> str:
-        bare = chrom.removeprefix("chr").removeprefix("Chr")
-        if bare in ("M", "MT"):
-            bare = "M"
-        return f"chr{bare}"
-
-    def close(self) -> None:
-        self.conn.close()
-
-
-_DB_SINGLETON: Optional[IndiGenDB] = None
-
-
-def get_db() -> Optional[IndiGenDB]:
-    """Return the loaded IndiGen DB if it's available locally, else None."""
-    global _DB_SINGLETON
-    if _DB_SINGLETON is not None:
-        return _DB_SINGLETON
-    if LOCAL_DB.exists() and LOCAL_DB.stat().st_size > 0:
-        _DB_SINGLETON = IndiGenDB(LOCAL_DB)
-        log.info("IndiGen DB loaded from %s (%.1f MB)",
-                 LOCAL_DB, LOCAL_DB.stat().st_size / 1024 / 1024)
-        return _DB_SINGLETON
-    return None
-
-
-async def ensure_db_downloaded(signed_url: Optional[str]) -> bool:
-    """Download the IndiGen SQLite DB from R2 if not present locally.
-
-    Returns True if the DB is ready, False if not (e.g. signed_url missing or
-    download failed). Callers should treat False as "IndiGen lookups disabled
-    for this run" and continue.
+    Multi-allelic sites have comma-separated AC/AF; if target_alt is provided
+    we'd ideally pick the right index, but IndiGen records are typically
+    bi-allelic and the API returns one record per allele anyway.
     """
-    if LOCAL_DB.exists() and LOCAL_DB.stat().st_size > 0:
-        return True
-    if not signed_url:
-        log.warning("IndiGen R2 URL not provided; skipping IndiGen lookups")
-        return False
-
-    LOCAL_DB.parent.mkdir(parents=True, exist_ok=True)
-    tmp = LOCAL_DB.with_suffix(".tmp")
+    if not info or info == "." or info == "":
+        return None
+    af_m = _INFO_AF.search(info)
+    ac_m = _INFO_AC.search(info)
+    an_m = _INFO_AN.search(info)
+    if not af_m:
+        return None
     try:
-        log.info("downloading IndiGen DB from %s", signed_url)
-        t = time.time()
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            async with client.stream("GET", signed_url) as resp:
-                resp.raise_for_status()
-                with open(tmp, "wb") as out:
-                    async for chunk in resp.aiter_bytes():
-                        out.write(chunk)
-        tmp.replace(LOCAL_DB)
-        log.info(
-            "IndiGen DB downloaded in %ds (%.1f MB)",
-            int(time.time() - t), LOCAL_DB.stat().st_size / 1024 / 1024,
+        af = float(af_m.group(1).split(",")[0])
+    except ValueError:
+        return None
+    try:
+        ac = int(ac_m.group(1).split(",")[0]) if ac_m else None
+    except ValueError:
+        ac = None
+    try:
+        an = int(an_m.group(1)) if an_m else None
+    except ValueError:
+        an = None
+    return {"ac": ac, "an": an, "af": af}
+
+
+def _normalize_chrom(chrom: str) -> str:
+    bare = chrom.removeprefix("chr").removeprefix("Chr")
+    if bare in ("M", "MT"):
+        bare = "M"
+    return f"chr{bare}"
+
+
+async def fetch_gene(
+    client: httpx.AsyncClient, gene: str,
+) -> dict[tuple[str, int, str, str], dict]:
+    """POST a gene query, return (chrom,pos,ref,alt) → {ac,an,af}."""
+    out: dict[tuple[str, int, str, str], dict] = {}
+    try:
+        resp = await client.post(
+            INDIGEN_API,
+            json={"Name": gene},
         )
-        return True
-    except Exception as e:  # noqa: BLE001
-        log.warning("IndiGen DB download failed: %s", e)
+        resp.raise_for_status()
+        data = resp.json()
+    except (httpx.HTTPError, ValueError) as e:
+        log.debug("IndiGen gene fetch failed for %s: %s", gene, e)
+        return out
+    for rec in data.get("mydata", []) or []:
+        chrom = _normalize_chrom(str(rec.get("Chr") or rec.get("Chr_VCF") or ""))
+        pos_raw = rec.get("Start") or rec.get("Start_VCF")
+        ref = rec.get("Ref") or rec.get("Ref_VCF")
+        alt = rec.get("Alt") or rec.get("Alt_VCF")
+        info = rec.get("Info") or ""
+        if not (chrom and pos_raw and ref and alt and info):
+            continue
         try:
-            tmp.unlink(missing_ok=True)
-        except Exception:  # noqa: BLE001
-            pass
-        return False
+            pos = int(pos_raw)
+        except (TypeError, ValueError):
+            continue
+        af_info = _parse_info_af(info, target_alt=alt)
+        if af_info is None:
+            continue
+        out[(chrom, pos, str(ref), str(alt))] = af_info
+    return out
 
 
-def populations_for(chrom: str, pos: int, ref: str, alt: str) -> list[PopulationAF]:
-    """Convenience: return PopulationAF row(s) for the engine pipeline.
+async def fetch_for_variants_async(
+    variants: Iterable[Variant],
+    *,
+    progress: Optional[Callable[[int, int], None]] = None,
+) -> dict[tuple[str, int, str, str], dict]:
+    """Build an (chrom,pos,ref,alt) → {ac,an,af} map for the variants by
+    batched gene lookup. Concurrent fetches of unique gene names; each gene
+    response carries hundreds of variants so this is efficient.
 
-    Returns empty list if IndiGen DB isn't loaded or the variant isn't found.
+    progress callback fires (done_genes, total_genes) after each gene
+    response so the engine can surface live progress.
     """
-    db = get_db()
-    if db is None:
-        return []
-    rec = db.lookup(chrom, pos, ref, alt)
-    if rec is None:
-        return []
-    return [PopulationAF(
-        source="indigenomes",
-        ac=rec.get("ac"),
-        an=rec.get("an"),
-        af=rec.get("af"),
-        n_hom=rec.get("n_hom"),
-    )]
+    # Collect unique non-empty gene names.
+    genes: list[str] = []
+    seen: set[str] = set()
+    for v in variants:
+        g = (v.gene or "").strip()
+        if g and g not in seen:
+            seen.add(g)
+            genes.append(g)
+    if not genes:
+        return {}
+
+    total = len(genes)
+    done = 0
+    lock = asyncio.Lock()
+    sem = asyncio.Semaphore(MAX_CONCURRENT)
+    merged: dict[tuple[str, int, str, str], dict] = {}
+
+    async with httpx.AsyncClient(
+        timeout=PER_BATCH_TIMEOUT,
+        headers={"User-Agent": "variantgpt-engine/0.1"},
+    ) as client:
+        async def one(gene: str) -> None:
+            nonlocal done
+            async with sem:
+                gene_map = await fetch_gene(client, gene)
+            async with lock:
+                merged.update(gene_map)
+                done += 1
+                if progress:
+                    progress(done, total)
+
+        await asyncio.gather(*(one(g) for g in genes))
+    return merged
+
+
+def apply_indigen_to_variants(
+    variants: list[Variant],
+    af_map: dict[tuple[str, int, str, str], dict],
+) -> int:
+    """Append an indigenomes PopulationAF row to each variant that has a
+    matching IndiGen record. Returns the count of variants annotated."""
+    n = 0
+    for v in variants:
+        key = (_normalize_chrom(v.chrom), v.pos, v.ref, v.alt)
+        rec = af_map.get(key)
+        if rec is None:
+            continue
+        # Drop any pre-existing indigenomes row (from a previous run / cached
+        # case.json) before appending — guarantees we never have stale data.
+        v.populations = [p for p in v.populations if p.source != "indigenomes"]
+        v.populations.append(PopulationAF(
+            source="indigenomes",
+            ac=rec.get("ac"),
+            an=rec.get("an"),
+            af=rec.get("af"),
+        ))
+        n += 1
+    return n
+
+
+# ─── back-compat stubs (we deleted the bulk SQLite path) ───
+async def ensure_db_downloaded(_signed_url: Optional[str]) -> bool:
+    return False
+
+
+def populations_for(_chrom: str, _pos: int, _ref: str, _alt: str) -> list[PopulationAF]:
+    """Used by annotation.py per-variant. With the live-API pivot, IndiGen is
+    queried in bulk after annotation (apply_indigen_to_variants); per-variant
+    calls would be too slow. Returns empty list — the bulk pass fills v.populations
+    directly."""
+    return []
