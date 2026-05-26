@@ -35,6 +35,7 @@ import sys
 import tempfile
 import time
 import traceback
+import gc
 from pathlib import Path
 from typing import Any
 
@@ -350,6 +351,13 @@ async def _execute_job(job: dict[str, Any]) -> None:
                         f"MAX_VARIANTS_AFTER_FILTER in container_server.py."
                     )
 
+                # Release the big pre-filter joint matrix now that we've
+                # narrowed down. Avoids holding 100k+ JointVariant objects
+                # alongside the survivors during the expensive annotation
+                # phase. (Python GC doesn't always free large transient
+                # data structures promptly without an explicit collect.)
+                gc.collect()
+
                 # ── Stage 4: VEP REST for survivors lacking CSQ ──
                 missing_csq = [jv for jv in joint if not jv.csq]
                 if missing_csq:
@@ -373,6 +381,10 @@ async def _execute_job(job: dict[str, Any]) -> None:
                         joint, progress=vep_progress,
                     )
                     emit(f"VEP REST: filled {filled} variants")
+                    # Force GC: VEP REST holds a lot of intermediate JSON
+                    # response data inside httpx + asyncio.gather. Explicit
+                    # collect reclaims ~100-300 MB before the next stage.
+                    gc.collect()
                     await post_status("running")
 
             track_versions = {"engine": "0.1.0"}
@@ -419,6 +431,12 @@ async def _execute_job(job: dict[str, Any]) -> None:
             emit(f"annotating + classifying {len(joint)} variants")
             variants: list[Variant] = await asyncio.to_thread(_annotate_classify_all)
             emit("annotation + classification done")
+            # We're past needing joint for ACMG criteria. Release it before
+            # the ClinVar overlay claims memory. (The compound_het_pass
+            # inside _annotate_classify_all already finished and wrote its
+            # results onto v.inheritance_models, so joint is no longer
+            # needed.)
+            gc.collect()
             await post_status("running")
 
             # ClinVar + dbNSFP overlay via myvariant.info — concurrent batches
