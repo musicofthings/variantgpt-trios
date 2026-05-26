@@ -208,6 +208,101 @@ def fetch_af_for_filtering(
     ))
 
 
+async def annotate_variants_async(
+    pairs: Iterable[tuple[JointVariant, Variant]],
+    *,
+    assembly: str = "hg38",
+    progress: Optional[Callable[[int, int], None]] = None,
+) -> int:
+    """Populate v.clinvar + v.predictors + v.populations for each pair, in place.
+
+    Concurrent batches via httpx.AsyncClient + semaphore. The `progress`
+    callback fires per finished batch so the caller can surface progress.
+    """
+    pairs_list = list(pairs)
+    if not pairs_list:
+        return 0
+    by_id: dict[str, tuple[JointVariant, Variant]] = {}
+    for jv, v in pairs_list:
+        vid = hgvs_id(jv)
+        if vid:
+            by_id[vid] = (jv, v)
+    if not by_id:
+        return 0
+
+    ids = list(by_id.keys())
+    chunks = [ids[i:i + BATCH_SIZE] for i in range(0, len(ids), BATCH_SIZE)]
+    total = len(chunks)
+    sem = asyncio.Semaphore(MAX_CONCURRENT)
+    done = 0
+    lock = asyncio.Lock()
+    annotated = 0
+
+    async with httpx.AsyncClient(
+        timeout=PER_BATCH_TIMEOUT,
+        headers={"User-Agent": "variantgpt-engine/0.1"},
+    ) as client:
+        async def fetch_one(chunk: list[str]) -> int:
+            nonlocal done
+            async with sem:
+                try:
+                    resp = await client.post(
+                        MYVARIANT_URL,
+                        data={
+                            "ids": ",".join(chunk),
+                            "fields": FIELDS,
+                            "assembly": assembly,
+                        },
+                    )
+                    resp.raise_for_status()
+                    results = resp.json()
+                except (httpx.HTTPError, ValueError) as exc:
+                    log.warning("myvariant.info annotate batch failed: %s", exc)
+                    async with lock:
+                        done += 1
+                        if progress:
+                            progress(done, total)
+                    return 0
+            local = 0
+            if isinstance(results, list):
+                for entry in results:
+                    vid = entry.get("query") or entry.get("_id")
+                    pair = by_id.get(vid)
+                    if not pair:
+                        continue
+                    _, v = pair
+                    cv = _project_clinvar(entry.get("clinvar"))
+                    if cv:
+                        v.clinvar = cv
+                        local += 1
+                    pops = _project_gnomad(entry.get("gnomad_exome"), entry.get("gnomad_genome"))
+                    if pops:
+                        v.populations = pops
+                        local += 1
+                    preds = _project_dbnsfp(entry.get("dbnsfp"))
+                    if preds:
+                        cur = v.predictors
+                        merged = PredictorScores(
+                            alphamissense=cur.alphamissense if cur.alphamissense is not None else preds.alphamissense,
+                            revel=cur.revel if cur.revel is not None else preds.revel,
+                            cadd=cur.cadd if cur.cadd is not None else preds.cadd,
+                            spliceai=cur.spliceai if cur.spliceai is not None else preds.spliceai,
+                            phylop=cur.phylop if cur.phylop is not None else preds.phylop,
+                            gerp=cur.gerp if cur.gerp is not None else preds.gerp,
+                        )
+                        v.predictors = merged
+                        local += 1
+            async with lock:
+                done += 1
+                if progress:
+                    progress(done, total)
+            return local
+
+        per_batch = await asyncio.gather(*(fetch_one(c) for c in chunks))
+        annotated = sum(per_batch)
+    return annotated
+
+
 def annotate_variants(
     pairs: Iterable[tuple[JointVariant, Variant]],
     *,

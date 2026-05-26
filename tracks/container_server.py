@@ -353,8 +353,25 @@ async def _execute_job(job: dict[str, Any]) -> None:
                 # ── Stage 4: VEP REST for survivors lacking CSQ ──
                 missing_csq = [jv for jv in joint if not jv.csq]
                 if missing_csq:
-                    emit(f"VEP REST: annotating {len(missing_csq)} variants")
-                    filled = await asyncio.to_thread(vep_rest.annotate_batch, joint)
+                    emit(
+                        f"VEP REST: annotating {len(missing_csq)} variants "
+                        f"({vep_rest.MAX_CONCURRENT}-way concurrent, "
+                        f"{vep_rest.BATCH_SIZE}/batch)"
+                    )
+                    last_prog = [0]
+
+                    def vep_progress(done: int, total: int) -> None:
+                        # Throttle to every ~10% so we don't spam D1.
+                        if done == total or (done - last_prog[0]) >= max(1, total // 10):
+                            last_prog[0] = done
+                            log.append(f"  VEP REST: {done}/{total} batches done")
+                            # Async post_status from a sync callback: schedule it.
+                            loop = asyncio.get_event_loop()
+                            loop.create_task(post_status("running"))
+
+                    filled = await vep_rest.annotate_batch_async(
+                        joint, progress=vep_progress,
+                    )
                     emit(f"VEP REST: filled {filled} variants")
                     await post_status("running")
 
@@ -404,12 +421,28 @@ async def _execute_job(job: dict[str, Any]) -> None:
             emit("annotation + classification done")
             await post_status("running")
 
-            # ClinVar + dbNSFP overlay via myvariant.info — batched, one POST
-            # per 1000 variants. Real-mode only (demo path uses curated data).
+            # ClinVar + dbNSFP overlay via myvariant.info — concurrent batches
+            # with progress emits so the UI sees movement through this stage.
+            # Real-mode only (demo path uses curated data).
             if real_mode and variants:
-                emit(f"myvariant.info: ClinVar + dbNSFP for {len(variants)} variants")
+                emit(
+                    f"myvariant.info: ClinVar+dbNSFP for {len(variants)} variants "
+                    f"({myvariant.MAX_CONCURRENT}-way concurrent, "
+                    f"{myvariant.BATCH_SIZE}/batch)"
+                )
+                last_prog_mv = [0]
+
+                def mv_progress(done: int, total: int) -> None:
+                    if done == total or (done - last_prog_mv[0]) >= max(1, total // 10):
+                        last_prog_mv[0] = done
+                        log.append(f"  myvariant.info: {done}/{total} batches done")
+                        loop = asyncio.get_event_loop()
+                        loop.create_task(post_status("running"))
+
                 pairs = list(zip(joint, variants))
-                filled = await asyncio.to_thread(myvariant.annotate_variants, pairs)
+                filled = await myvariant.annotate_variants_async(
+                    pairs, progress=mv_progress,
+                )
                 clinvar_count = sum(1 for v in variants if v.clinvar)
                 emit(f"myvariant.info: filled={filled} clinvar_records={clinvar_count}")
                 await post_status("running")

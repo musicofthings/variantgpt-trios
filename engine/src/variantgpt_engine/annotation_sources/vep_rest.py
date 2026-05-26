@@ -17,9 +17,9 @@ demo-data lookup / "no annotation" rendering — never a hard failure.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
-import time
-from typing import Iterable
+from typing import Callable, Iterable, Optional
 
 import httpx
 
@@ -29,21 +29,24 @@ log = logging.getLogger(__name__)
 
 VEP_URL = "https://rest.ensembl.org/vep/human/region"
 BATCH_SIZE = 200
-SLEEP_SEC = 0.1
+MAX_CONCURRENT = 4        # Ensembl REST recommends staying ≤15 req/sec; 4-way concurrent stays safely under
+PER_BATCH_TIMEOUT = 60.0  # Ensembl can be slow on 200-variant payloads
 
 
-def annotate_batch(
+async def annotate_batch_async(
     joint: Iterable[JointVariant],
     *,
-    timeout: float = 30.0,
     only_missing_csq: bool = True,
+    progress: Optional[Callable[[int, int], None]] = None,
 ) -> int:
-    """Populate jv.csq in-place for variants that lack it. Returns the count
-    of variants that received fresh annotation.
+    """Populate jv.csq in-place for variants that lack it.
 
-    Each VEP REST response carries one entry per transcript_consequence; we
-    project them onto our CSQ schema so downstream code (csq.apply_csq,
-    filter.filter_candidates) keeps working unchanged.
+    Concurrent VEP REST batches via httpx.AsyncClient + semaphore. Each batch
+    is 200 variants; up to MAX_CONCURRENT batches run in parallel. The
+    `progress` callback fires with (done_batches, total_batches) after each
+    batch so the caller can surface per-batch movement to the engine log.
+
+    Returns the count of variants that received fresh annotation.
     """
     targets: list[JointVariant] = [
         jv for jv in joint
@@ -52,35 +55,67 @@ def annotate_batch(
     if not targets:
         return 0
 
-    filled = 0
-    with httpx.Client(timeout=timeout, headers={"User-Agent": "variantgpt-engine/0.1"}) as client:
-        for i in range(0, len(targets), BATCH_SIZE):
-            chunk = targets[i:i + BATCH_SIZE]
-            payload = {"variants": [_vep_region(jv) for jv in chunk]}
-            try:
-                resp = client.post(
-                    VEP_URL,
-                    headers={"content-type": "application/json", "accept": "application/json"},
-                    json=payload,
-                )
-                resp.raise_for_status()
-                results = resp.json()
-            except (httpx.HTTPError, ValueError) as exc:
-                log.warning("VEP REST batch %d-%d failed: %s", i, i + len(chunk), exc)
-                continue
+    chunks = [targets[i:i + BATCH_SIZE] for i in range(0, len(targets), BATCH_SIZE)]
+    total = len(chunks)
+    sem = asyncio.Semaphore(MAX_CONCURRENT)
+    done = 0
+    lock = asyncio.Lock()
+    filled_count = 0
 
-            # Match results back to inputs by 'input' string (region notation).
-            by_input = {r.get("input"): r for r in results if isinstance(r, dict)}
-            for jv in chunk:
-                vep = by_input.get(_vep_region(jv))
-                if not vep:
-                    continue
-                jv.csq = _project(vep)
-                if jv.csq:
-                    filled += 1
+    async with httpx.AsyncClient(
+        timeout=PER_BATCH_TIMEOUT,
+        headers={"User-Agent": "variantgpt-engine/0.1"},
+    ) as client:
+        async def fetch_batch(chunk: list[JointVariant]) -> int:
+            nonlocal done
+            async with sem:
+                payload = {"variants": [_vep_region(jv) for jv in chunk]}
+                try:
+                    resp = await client.post(
+                        VEP_URL,
+                        headers={"content-type": "application/json", "accept": "application/json"},
+                        json=payload,
+                    )
+                    resp.raise_for_status()
+                    results = resp.json()
+                except (httpx.HTTPError, ValueError) as exc:
+                    log.warning("VEP REST batch failed: %s", exc)
+                    async with lock:
+                        done += 1
+                        if progress:
+                            progress(done, total)
+                    return 0
+            local_filled = 0
+            if isinstance(results, list):
+                by_input = {r.get("input"): r for r in results if isinstance(r, dict)}
+                for jv in chunk:
+                    vep = by_input.get(_vep_region(jv))
+                    if not vep:
+                        continue
+                    jv.csq = _project(vep)
+                    if jv.csq:
+                        local_filled += 1
+            async with lock:
+                done += 1
+                if progress:
+                    progress(done, total)
+            return local_filled
 
-            time.sleep(SLEEP_SEC)
-    return filled
+        per_batch = await asyncio.gather(*(fetch_batch(c) for c in chunks))
+        filled_count = sum(per_batch)
+    return filled_count
+
+
+def annotate_batch(
+    joint: Iterable[JointVariant],
+    *,
+    only_missing_csq: bool = True,
+    progress: Optional[Callable[[int, int], None]] = None,
+) -> int:
+    """Sync wrapper around annotate_batch_async — convenient for tests/CLI."""
+    return asyncio.run(annotate_batch_async(
+        joint, only_missing_csq=only_missing_csq, progress=progress,
+    ))
 
 
 def _vep_region(jv: JointVariant) -> str:
