@@ -56,6 +56,7 @@ from variantgpt_engine.acmg import classify  # noqa: E402
 from variantgpt_engine.annotation import AnnotationContext, annotate  # noqa: E402
 from variantgpt_engine.annotation_sources import myvariant, vep_rest  # noqa: E402
 from variantgpt_engine.annotation_sources.csq import pick_canonical  # noqa: E402
+from variantgpt_engine import cache  # noqa: E402
 from variantgpt_engine.build_detect import detect_build  # noqa: E402
 from variantgpt_engine.filter import filter_candidates, proband_carrier_filter  # noqa: E402
 from variantgpt_engine.inheritance import assign_models, compound_het_pass  # noqa: E402
@@ -136,6 +137,7 @@ async def _execute_job(job: dict[str, Any]) -> None:
     manifest = job["manifest"]
     vcf_urls: dict[str, str] = job["vcf_urls"]
     case_put_url: str = job["case_put_url"]
+    cache_urls: dict[str, dict[str, str]] = job.get("cache_urls", {})
     callback_url: str = job["callback_url"]
     secret: str = job["callback_secret"]
 
@@ -313,27 +315,40 @@ async def _execute_job(job: dict[str, Any]) -> None:
                         f"bcftools norm -m -any | bcftools view -i 'GT[*]=\"alt\"'`"
                     )
                 if len(joint) > MAX_VARIANTS_AFTER_FILTER // 2:
-                    emit(
-                        f"myvariant.info: AF lookup for {len(joint)} variants "
-                        f"(chunks of {AF_LOOKUP_CHUNK_SIZE}, "
-                        f"{myvariant.MAX_CONCURRENT}-way concurrent within each chunk)"
-                    )
+                    # Checkpoint: if a previous run cached the AF lookup
+                    # output, skip the lookup entirely. This makes reruns
+                    # after a downstream failure ~6 minutes faster.
                     af_map: dict[tuple, float] = {}
-                    chunks = [
-                        joint[i:i + AF_LOOKUP_CHUNK_SIZE]
-                        for i in range(0, len(joint), AF_LOOKUP_CHUNK_SIZE)
-                    ]
-                    for idx, chunk in enumerate(chunks, start=1):
-                        chunk_start = time.time()
-                        chunk_af = await myvariant.fetch_af_for_filtering_async(chunk)
-                        af_map.update(chunk_af)
+                    cached_af = None
+                    if cache_urls.get("af_map", {}).get("get"):
+                        cached_af = await cache.load_af_map(cache_urls["af_map"]["get"])
+                    if cached_af is not None:
+                        af_map = cached_af
+                        emit(f"myvariant.info: AF cache HIT ({len(af_map)} entries) — skipping lookup")
+                    else:
                         emit(
-                            f"  myvariant.info chunk {idx}/{len(chunks)}: "
-                            f"{len(chunk)} variants, {len(chunk_af)} AFs found "
-                            f"({int((time.time() - chunk_start) * 1000)}ms)"
+                            f"myvariant.info: AF lookup for {len(joint)} variants "
+                            f"(chunks of {AF_LOOKUP_CHUNK_SIZE}, "
+                            f"{myvariant.MAX_CONCURRENT}-way concurrent within each chunk)"
                         )
-                        # post_status after every chunk so the UI sees live progress.
-                        await post_status("running")
+                        chunks = [
+                            joint[i:i + AF_LOOKUP_CHUNK_SIZE]
+                            for i in range(0, len(joint), AF_LOOKUP_CHUNK_SIZE)
+                        ]
+                        for idx, chunk in enumerate(chunks, start=1):
+                            chunk_start = time.time()
+                            chunk_af = await myvariant.fetch_af_for_filtering_async(chunk)
+                            af_map.update(chunk_af)
+                            emit(
+                                f"  myvariant.info chunk {idx}/{len(chunks)}: "
+                                f"{len(chunk)} variants, {len(chunk_af)} AFs found "
+                                f"({int((time.time() - chunk_start) * 1000)}ms)"
+                            )
+                            await post_status("running")
+                        # Save the cache so a downstream failure doesn't lose this work.
+                        if cache_urls.get("af_map", {}).get("put"):
+                            saved = await cache.save_af_map(cache_urls["af_map"]["put"], af_map)
+                            emit(f"myvariant.info: AF cache {'saved' if saved else 'save FAILED'}")
                     before = len(joint)
                     joint = [jv for jv in joint if af_map.get(jv.key, 0.0) < 0.01]
                     emit(
@@ -359,33 +374,41 @@ async def _execute_job(job: dict[str, Any]) -> None:
                 gc.collect()
 
                 # ── Stage 4: VEP REST for survivors lacking CSQ ──
-                missing_csq = [jv for jv in joint if not jv.csq]
-                if missing_csq:
-                    emit(
-                        f"VEP REST: annotating {len(missing_csq)} variants "
-                        f"({vep_rest.MAX_CONCURRENT}-way concurrent, "
-                        f"{vep_rest.BATCH_SIZE}/batch)"
-                    )
-                    last_prog = [0]
+                # Checkpoint: try the CSQ cache first. If hit, re-attach
+                # cached CSQ to surviving JointVariants and skip VEP REST.
+                cached_csq = None
+                if cache_urls.get("csq", {}).get("get"):
+                    cached_csq = await cache.load_csq(cache_urls["csq"]["get"])
+                if cached_csq is not None:
+                    hits = cache.apply_csq_cache(joint, cached_csq)
+                    emit(f"VEP REST: CSQ cache HIT ({hits} variants restored) — skipping lookup")
+                else:
+                    missing_csq = [jv for jv in joint if not jv.csq]
+                    if missing_csq:
+                        emit(
+                            f"VEP REST: annotating {len(missing_csq)} variants "
+                            f"({vep_rest.MAX_CONCURRENT}-way concurrent, "
+                            f"{vep_rest.BATCH_SIZE}/batch)"
+                        )
+                        last_prog = [0]
 
-                    def vep_progress(done: int, total: int) -> None:
-                        # Throttle to every ~10% so we don't spam D1.
-                        if done == total or (done - last_prog[0]) >= max(1, total // 10):
-                            last_prog[0] = done
-                            log.append(f"  VEP REST: {done}/{total} batches done")
-                            # Async post_status from a sync callback: schedule it.
-                            loop = asyncio.get_event_loop()
-                            loop.create_task(post_status("running"))
+                        def vep_progress(done: int, total: int) -> None:
+                            if done == total or (done - last_prog[0]) >= max(1, total // 10):
+                                last_prog[0] = done
+                                log.append(f"  VEP REST: {done}/{total} batches done")
+                                loop = asyncio.get_event_loop()
+                                loop.create_task(post_status("running"))
 
-                    filled = await vep_rest.annotate_batch_async(
-                        joint, progress=vep_progress,
-                    )
-                    emit(f"VEP REST: filled {filled} variants")
-                    # Force GC: VEP REST holds a lot of intermediate JSON
-                    # response data inside httpx + asyncio.gather. Explicit
-                    # collect reclaims ~100-300 MB before the next stage.
-                    gc.collect()
-                    await post_status("running")
+                        filled = await vep_rest.annotate_batch_async(
+                            joint, progress=vep_progress,
+                        )
+                        emit(f"VEP REST: filled {filled} variants")
+                        gc.collect()
+                        # Save cache so a downstream failure preserves this work.
+                        if cache_urls.get("csq", {}).get("put"):
+                            saved = await cache.save_csq(cache_urls["csq"]["put"], joint)
+                            emit(f"VEP REST: CSQ cache {'saved' if saved else 'save FAILED'}")
+                await post_status("running")
 
             track_versions = {"engine": "0.1.0"}
             if not real_mode:
@@ -428,14 +451,20 @@ async def _execute_job(job: dict[str, Any]) -> None:
                     priority(vv, hpo_ids)
                 return out
 
-            emit(f"annotating + classifying {len(joint)} variants")
-            variants: list[Variant] = await asyncio.to_thread(_annotate_classify_all)
-            emit("annotation + classification done")
-            # We're past needing joint for ACMG criteria. Release it before
-            # the ClinVar overlay claims memory. (The compound_het_pass
-            # inside _annotate_classify_all already finished and wrote its
-            # results onto v.inheritance_models, so joint is no longer
-            # needed.)
+            # Checkpoint: try the variants cache. If hit, skip annotate+classify.
+            cached_variants = None
+            if real_mode and cache_urls.get("variants", {}).get("get"):
+                cached_variants = await cache.load_variants(cache_urls["variants"]["get"])
+            if cached_variants is not None:
+                variants: list[Variant] = cached_variants
+                emit(f"annotate+classify: cache HIT ({len(variants)} variants restored)")
+            else:
+                emit(f"annotating + classifying {len(joint)} variants")
+                variants = await asyncio.to_thread(_annotate_classify_all)
+                emit("annotation + classification done")
+                if real_mode and cache_urls.get("variants", {}).get("put"):
+                    saved = await cache.save_variants(cache_urls["variants"]["put"], variants)
+                    emit(f"annotate+classify: cache {'saved' if saved else 'save FAILED'}")
             gc.collect()
             await post_status("running")
 

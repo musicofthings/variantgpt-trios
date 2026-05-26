@@ -222,6 +222,24 @@ async function _continueRun(
   const caseJsonKey = `cases/${id}/case.json`;
   const casePutUrl = await signR2(c.env, "variantgpt", caseJsonKey, "PUT", 3600);
 
+  // Pipeline-stage checkpoints. The engine GET-probes each cache_urls.<stage>.get
+  // at the start of the corresponding stage; if it's a cache hit, the stage
+  // is skipped. On stage completion the engine PUTs the result to .put.
+  // This makes reruns after a downstream failure cheap (the slow stages —
+  // AF lookup and VEP REST — don't re-execute).
+  async function signCacheStage(stage: string) {
+    const key = `cases/${id}/cache/${stage}.json.gz`;
+    return {
+      get: await signR2(c.env, "variantgpt", key, "GET", 3600),
+      put: await signR2(c.env, "variantgpt", key, "PUT", 3600),
+    };
+  }
+  const cacheUrls = {
+    af_map: await signCacheStage("af_map"),
+    csq: await signCacheStage("csq"),
+    variants: await signCacheStage("variants"),
+  };
+
   // Persist job row in queued state.
   await c.env.DB.prepare(
     `INSERT INTO jobs (case_id, status, started_at, log_json, manifest_json)
@@ -246,6 +264,7 @@ async function _continueRun(
       manifest,
       vcf_urls: vcfUrls,
       case_put_url: casePutUrl,
+      cache_urls: cacheUrls,
       callback_url: callbackUrl,
       callback_secret: c.env.ENGINE_WEBHOOK_SECRET,
     }),
