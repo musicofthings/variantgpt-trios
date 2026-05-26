@@ -315,40 +315,53 @@ async def _execute_job(job: dict[str, Any]) -> None:
                         f"bcftools norm -m -any | bcftools view -i 'GT[*]=\"alt\"'`"
                     )
                 if len(joint) > MAX_VARIANTS_AFTER_FILTER // 2:
-                    # Checkpoint: if a previous run cached the AF lookup
-                    # output, skip the lookup entirely. This makes reruns
-                    # after a downstream failure ~6 minutes faster.
+                    # Incremental checkpoint: load whatever was cached from a
+                    # prior partial run, then only look up the variants we
+                    # don't yet have AFs for. Save the cache after every
+                    # chunk so a mid-lookup crash preserves all completed
+                    # work.
                     af_map: dict[tuple, float] = {}
-                    cached_af = None
                     if cache_urls.get("af_map", {}).get("get"):
-                        cached_af = await cache.load_af_map(cache_urls["af_map"]["get"])
-                    if cached_af is not None:
-                        af_map = cached_af
-                        emit(f"myvariant.info: AF cache HIT ({len(af_map)} entries) — skipping lookup")
+                        cached = await cache.load_af_map(cache_urls["af_map"]["get"])
+                        if cached:
+                            af_map = cached
+                            emit(f"myvariant.info: AF cache loaded ({len(af_map)} entries from prior run)")
+
+                    # Variants still needing AF lookup.
+                    missing = [jv for jv in joint if jv.key not in af_map]
+                    if not missing:
+                        emit(f"myvariant.info: AF lookup fully cached ({len(af_map)} entries) — skipping")
                     else:
                         emit(
-                            f"myvariant.info: AF lookup for {len(joint)} variants "
+                            f"myvariant.info: AF lookup for {len(missing)} variants "
+                            f"({len(joint) - len(missing)} already cached) "
                             f"(chunks of {AF_LOOKUP_CHUNK_SIZE}, "
                             f"{myvariant.MAX_CONCURRENT}-way concurrent within each chunk)"
                         )
                         chunks = [
-                            joint[i:i + AF_LOOKUP_CHUNK_SIZE]
-                            for i in range(0, len(joint), AF_LOOKUP_CHUNK_SIZE)
+                            missing[i:i + AF_LOOKUP_CHUNK_SIZE]
+                            for i in range(0, len(missing), AF_LOOKUP_CHUNK_SIZE)
                         ]
                         for idx, chunk in enumerate(chunks, start=1):
                             chunk_start = time.time()
                             chunk_af = await myvariant.fetch_af_for_filtering_async(chunk)
                             af_map.update(chunk_af)
+                            elapsed_ms = int((time.time() - chunk_start) * 1000)
+                            # Save cache incrementally after every chunk. If the
+                            # engine dies on the next chunk, the rerun resumes
+                            # from here instead of starting over.
+                            saved = True
+                            if cache_urls.get("af_map", {}).get("put"):
+                                saved = await cache.save_af_map(cache_urls["af_map"]["put"], af_map)
                             emit(
                                 f"  myvariant.info chunk {idx}/{len(chunks)}: "
                                 f"{len(chunk)} variants, {len(chunk_af)} AFs found "
-                                f"({int((time.time() - chunk_start) * 1000)}ms)"
+                                f"({elapsed_ms}ms){'' if saved else ' [cache save FAILED]'}"
                             )
                             await post_status("running")
-                        # Save the cache so a downstream failure doesn't lose this work.
-                        if cache_urls.get("af_map", {}).get("put"):
-                            saved = await cache.save_af_map(cache_urls["af_map"]["put"], af_map)
-                            emit(f"myvariant.info: AF cache {'saved' if saved else 'save FAILED'}")
+                            # Reclaim memory between chunks — the httpx client
+                            # state and JSON parse buffers can be sizable.
+                            gc.collect()
                     before = len(joint)
                     joint = [jv for jv in joint if af_map.get(jv.key, 0.0) < 0.01]
                     emit(
@@ -374,40 +387,51 @@ async def _execute_job(job: dict[str, Any]) -> None:
                 gc.collect()
 
                 # ── Stage 4: VEP REST for survivors lacking CSQ ──
-                # Checkpoint: try the CSQ cache first. If hit, re-attach
-                # cached CSQ to surviving JointVariants and skip VEP REST.
-                cached_csq = None
+                # Incremental checkpoint: load whatever was cached from a prior
+                # partial run, restore CSQ onto matching JointVariants, then
+                # only call VEP REST for the variants still without CSQ.
                 if cache_urls.get("csq", {}).get("get"):
                     cached_csq = await cache.load_csq(cache_urls["csq"]["get"])
-                if cached_csq is not None:
-                    hits = cache.apply_csq_cache(joint, cached_csq)
-                    emit(f"VEP REST: CSQ cache HIT ({hits} variants restored) — skipping lookup")
+                    if cached_csq:
+                        hits = cache.apply_csq_cache(joint, cached_csq)
+                        emit(f"VEP REST: CSQ cache loaded ({hits} variants from prior run)")
+
+                missing_csq = [jv for jv in joint if not jv.csq]
+                if not missing_csq:
+                    emit("VEP REST: all variants already have CSQ — skipping lookup")
                 else:
-                    missing_csq = [jv for jv in joint if not jv.csq]
-                    if missing_csq:
-                        emit(
-                            f"VEP REST: annotating {len(missing_csq)} variants "
-                            f"({vep_rest.MAX_CONCURRENT}-way concurrent, "
-                            f"{vep_rest.BATCH_SIZE}/batch)"
-                        )
-                        last_prog = [0]
+                    emit(
+                        f"VEP REST: annotating {len(missing_csq)} variants "
+                        f"({len(joint) - len(missing_csq)} already cached) "
+                        f"({vep_rest.MAX_CONCURRENT}-way concurrent, "
+                        f"{vep_rest.BATCH_SIZE}/batch)"
+                    )
+                    last_prog = [0]
+                    save_threshold = [0]  # save cache every N batches
 
-                        def vep_progress(done: int, total: int) -> None:
-                            if done == total or (done - last_prog[0]) >= max(1, total // 10):
-                                last_prog[0] = done
-                                log.append(f"  VEP REST: {done}/{total} batches done")
+                    def vep_progress(done: int, total: int) -> None:
+                        if done == total or (done - last_prog[0]) >= max(1, total // 10):
+                            last_prog[0] = done
+                            log.append(f"  VEP REST: {done}/{total} batches done")
+                            loop = asyncio.get_event_loop()
+                            loop.create_task(post_status("running"))
+                        # Save cache every 10 batches (≈ every 2000 variants) so
+                        # a mid-stage crash preserves most of the work.
+                        if (done - save_threshold[0]) >= 10 or done == total:
+                            save_threshold[0] = done
+                            if cache_urls.get("csq", {}).get("put"):
                                 loop = asyncio.get_event_loop()
-                                loop.create_task(post_status("running"))
+                                loop.create_task(cache.save_csq(cache_urls["csq"]["put"], joint))
 
-                        filled = await vep_rest.annotate_batch_async(
-                            joint, progress=vep_progress,
-                        )
-                        emit(f"VEP REST: filled {filled} variants")
-                        gc.collect()
-                        # Save cache so a downstream failure preserves this work.
-                        if cache_urls.get("csq", {}).get("put"):
-                            saved = await cache.save_csq(cache_urls["csq"]["put"], joint)
-                            emit(f"VEP REST: CSQ cache {'saved' if saved else 'save FAILED'}")
+                    filled = await vep_rest.annotate_batch_async(
+                        joint, progress=vep_progress,
+                    )
+                    emit(f"VEP REST: filled {filled} variants")
+                    gc.collect()
+                    # Final save in case the throttled saves missed the last batch.
+                    if cache_urls.get("csq", {}).get("put"):
+                        saved = await cache.save_csq(cache_urls["csq"]["put"], joint)
+                        emit(f"VEP REST: CSQ cache {'saved' if saved else 'save FAILED'}")
                 await post_status("running")
 
             track_versions = {"engine": "0.1.0"}
