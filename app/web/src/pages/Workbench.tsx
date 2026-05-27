@@ -421,42 +421,49 @@ export function Workbench() {
         </div>
       ) : null}
 
-      <div style={{ display: "grid", gridTemplateColumns: selected ? "1fr 460px" : "1fr", gap: 16, alignItems: "start" }}>
-        <div className="card" style={{ padding: 0 }}>
-          <table className="table">
+      <div className={`workbench-grid ${selected ? "drawer-open" : "no-drawer"}`}>
+        <div className="card workbench-table" style={{ padding: 0, overflow: "hidden" }}>
+          <table className="table variant-table">
             <thead>
               <tr>
                 {/* Select-all checkbox for this tab's currently-visible rows. */}
-                <th style={{ width: 28 }}>
+                <th className="col-check">
                   <input
                     type="checkbox"
                     aria-label="Select all visible variants"
+                    title="Select / deselect all visible rows for the report"
                     checked={allVisibleSelected}
                     onChange={(e) => selectAllVisible(e.target.checked)}
                   />
                 </th>
-                <th className="num">#</th>
-                <SortHeader label="Gene" sortKey="gene" active={sortKey} dir={sortDir} onSort={toggleSort} />
-                <th>HGVS</th>
-                <SortHeader label="Consequence" sortKey="consequence" active={sortKey} dir={sortDir} onSort={toggleSort} />
-                <th>Inheritance</th>
-                <SortHeader label="AF global" sortKey="af_global" active={sortKey} dir={sortDir} onSort={toggleSort} numeric />
-                <SortHeader label="AF SAS" sortKey="af_sas" active={sortKey} dir={sortDir} onSort={toggleSort} numeric />
-                <SortHeader label="AF Indi" sortKey="af_indi" active={sortKey} dir={sortDir} onSort={toggleSort} numeric />
-                <SortHeader label="Tier" sortKey="tier" active={sortKey} dir={sortDir} onSort={toggleSort} />
-                <SortHeader label="Δ" sortKey="reclass" active={sortKey} dir={sortDir} onSort={toggleSort} />
+                <th className="num col-num">#</th>
+                <SortHeader label="Gene" sortKey="gene" active={sortKey} dir={sortDir} onSort={toggleSort} className="col-gene" />
+                <th className="col-hgvs" title="HGVS notation — coding (c.) and protein (p.) consequence">HGVS</th>
+                <SortHeader label="Consequence" sortKey="consequence" active={sortKey} dir={sortDir} onSort={toggleSort} className="col-cons" />
+                <th className="col-inh" title="Trio inheritance model assigned by the engine (de novo, AR hom, comp het, …)">Inheritance</th>
+                <SortHeader label={<abbr title="Allele frequency in gnomAD v4 global (exome + genome)">AF global</abbr>}
+                  sortKey="af_global" active={sortKey} dir={sortDir} onSort={toggleSort} numeric className="col-af" />
+                <SortHeader label={<abbr title="Allele frequency in gnomAD South Asian — informational only; reclassification uses IndiGen instead">AF SAS</abbr>}
+                  sortKey="af_sas" active={sortKey} dir={sortDir} onSort={toggleSort} numeric className="col-af col-af-sas" />
+                <SortHeader label={<abbr title="Allele frequency in IndiGenomes (IGIB, 1,029 Indian whole genomes) — primary signal for South Asian reclassification">AF Indi</abbr>}
+                  sortKey="af_indi" active={sortKey} dir={sortDir} onSort={toggleSort} numeric className="col-af col-af-indi" />
+                <SortHeader label="Tier" sortKey="tier" active={sortKey} dir={sortDir} onSort={toggleSort} className="col-tier" />
+                <SortHeader label={<abbr title="Δ — points change after South Asian reclassification (negative = more benign)">Δ</abbr>}
+                  sortKey="reclass" active={sortKey} dir={sortDir} onSort={toggleSort} className="col-delta" />
               </tr>
             </thead>
             <tbody>
               {visible.map((v, i) => {
                 const checked = selectedForReport.has(v.id);
+                const hgvsText = `${v.hgvs_c ?? ""}${v.hgvs_p ? ` (${v.hgvs_p})` : ""}`;
+                const inheritText = v.inheritance_models.map(humanizeModel).join(", ");
                 return (
                   <tr
                     key={v.id}
                     className={v.reclass ? "reclass" : undefined}
                     style={{ cursor: "pointer", background: selectedId === v.id ? "var(--primary-soft)" : undefined }}
                   >
-                    <td onClick={(e) => e.stopPropagation()}>
+                    <td className="col-check" onClick={(e) => e.stopPropagation()}>
                       <input
                         type="checkbox"
                         aria-label={`Select ${v.gene ?? v.id} for report`}
@@ -464,19 +471,21 @@ export function Workbench() {
                         onChange={() => toggleSelect(v.id)}
                       />
                     </td>
-                    <td className="num" onClick={() => setSelectedId(v.id)}>{i + 1}</td>
-                    <td className="mono" onClick={() => setSelectedId(v.id)}>{v.gene}</td>
-                    <td className="mono" onClick={() => setSelectedId(v.id)}>
-                      {v.hgvs_c}{" "}
-                      <span style={{ color: "var(--ink-soft)" }}>{v.hgvs_p}</span>
+                    <td className="num col-num" onClick={() => setSelectedId(v.id)}>{i + 1}</td>
+                    <td className="mono col-gene" onClick={() => setSelectedId(v.id)} title={v.gene}>{v.gene}</td>
+                    <td className="mono col-hgvs" onClick={() => setSelectedId(v.id)} title={hgvsText}>
+                      {v.hgvs_c}
+                      {v.hgvs_p ? <span style={{ color: "var(--ink-soft)" }}> {v.hgvs_p}</span> : null}
                     </td>
-                    <td onClick={() => setSelectedId(v.id)}>{v.consequence}</td>
-                    <td onClick={() => setSelectedId(v.id)}>{v.inheritance_models.map(humanizeModel).join(", ")}</td>
-                    <td className="num" onClick={() => setSelectedId(v.id)}>{fmt(v.af_global)}</td>
-                    <td className="num" onClick={() => setSelectedId(v.id)}>{fmt(v.af_sas)}</td>
-                    <td className="num" onClick={() => setSelectedId(v.id)}>{fmt(v.af_indi)}</td>
-                    <td onClick={() => setSelectedId(v.id)}><TierChip tier={v.baseline_tier} /></td>
-                    <td onClick={() => setSelectedId(v.id)}>{v.reclass ? <ReclassBadge {...v.reclass} /> : null}</td>
+                    <td className="col-cons" onClick={() => setSelectedId(v.id)} title={v.consequence ?? undefined}>
+                      {abbrevConsequence(v.consequence)}
+                    </td>
+                    <td className="col-inh" onClick={() => setSelectedId(v.id)} title={inheritText}>{inheritText}</td>
+                    <td className="num col-af" onClick={() => setSelectedId(v.id)} title={`gnomAD global: ${v.af_global ?? "—"}`}>{fmt(v.af_global)}</td>
+                    <td className="num col-af col-af-sas" onClick={() => setSelectedId(v.id)} title={`gnomAD SAS: ${v.af_sas ?? "—"}`}>{fmt(v.af_sas)}</td>
+                    <td className="num col-af col-af-indi" onClick={() => setSelectedId(v.id)} title={`IndiGenomes: ${v.af_indi ?? "—"}`}>{fmt(v.af_indi)}</td>
+                    <td className="col-tier" onClick={() => setSelectedId(v.id)}><TierChip tier={v.baseline_tier} /></td>
+                    <td className="col-delta" onClick={() => setSelectedId(v.id)}>{v.reclass ? <ReclassBadge {...v.reclass} /> : null}</td>
                   </tr>
                 );
               })}
@@ -491,13 +500,11 @@ export function Workbench() {
           </table>
         </div>
 
-        {/* Sticky drawer — stays on screen while the user scrolls the long
-            variant table. position:sticky with top offset keeps it pinned
-            under the topbar. */}
+        {/* Drawer — sticky on desktop with own internal scroll; full-screen
+            overlay on screens narrower than 900px (handled by the
+            .variant-drawer media query in global.css). */}
         {selected ? (
-          <div style={{ position: "sticky", top: 16, maxHeight: "calc(100vh - 32px)", overflowY: "auto" }}>
-            <Drawer variant={selected} onClose={() => setSelectedId(null)} />
-          </div>
+          <Drawer variant={selected} onClose={() => setSelectedId(null)} />
         ) : null}
       </div>
     </>
@@ -506,7 +513,7 @@ export function Workbench() {
 
 function Drawer({ variant, onClose }: { variant: VariantRow; onClose: () => void }) {
   return (
-    <aside className="card" style={{ alignSelf: "start", padding: 20 }}>
+    <aside className="card variant-drawer">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", gap: 12 }}>
         <div>
           <h3 className="mono" style={{ fontFamily: "var(--font-mono)" }}>
@@ -658,17 +665,21 @@ function ClinicalCard({ v }: { v: VariantRow }) {
         <tbody>
           <DRow label="Gene" value={
             geneUrl ? <a href={geneUrl} target="_blank" rel="noreferrer">{v.gene}</a> : v.gene
-          } />
-          <DRow label="Transcript" value={v.transcript} mono />
-          <DRow label="Location" value={v.exon ? `Exon ${v.exon}` : null} />
+          } tipForLabel="Gene symbol assigned by VEP for the canonical (MANE Select) transcript at this position." />
+          <DRow label="Transcript" value={v.transcript} mono
+            tipForLabel="The MANE Select transcript (RefSeq NM_ accession) — the clinical-standard reference transcript for this gene." />
+          <DRow label="Location" value={v.exon ? `Exon ${v.exon}` : null}
+            tipForLabel="Exon rank within the transcript, e.g. '14/57' means exon 14 of 57. Empty for intronic / UTR variants." />
           <DRow label="Variant (HGVS)" value={
             <>
               <span className="mono">{v.hgvs_c}</span>
               {v.hgvs_p ? <span className="mono" style={{ color: "var(--ink-soft)" }}> ({v.hgvs_p})</span> : null}
             </>
-          } />
-          <DRow label="Genomic" value={v.genomic_hgvs} mono />
-          <DRow label="Consequence" value={v.consequence} />
+          } tipForLabel="HGVS nomenclature. c. = coding sequence (mRNA-level), p. = protein consequence (one-letter or three-letter amino acid)." />
+          <DRow label="Genomic" value={v.genomic_hgvs} mono
+            tipForLabel="HGVS genomic notation (g.) — chromosomal coordinate of the variant. Useful for cross-referencing browsers like UCSC and gnomAD." />
+          <DRow label="Consequence" value={v.consequence}
+            tipForLabel="Sequence Ontology (SO) consequence term from VEP, e.g. missense_variant, stop_gained, splice_donor_variant." />
           <DRow label="Inheritance" value={
             v.inheritance_models.length
               ? <>
@@ -680,10 +691,11 @@ function ClinicalCard({ v }: { v: VariantRow }) {
                   ) : null}
                 </>
               : null
-          } />
+          } tipForLabel="Inheritance model assigned in this trio: de_novo / ar_hom / comp_het / ad_inherited / x_linked_recessive / x_linked_dominant / mitochondrial. Confidence is set by per-call QC (GQ, DP, allele balance)." />
           <DRow label="OMIM gene" value={
             omimUrl ? <a href={omimUrl} target="_blank" rel="noreferrer">{v.omim_id}</a> : null
-          } />
+          } tipForLabel="OMIM gene * number from mygene.info. Click to open omim.org for the gene-phenotype description." />
+
           {v.clinvar ? (
             <DRow label="ClinVar" value={
               <>
@@ -710,7 +722,7 @@ function ClinicalCard({ v }: { v: VariantRow }) {
           ) : null}
           <DRow label="ACMG criteria fired" value={
             firedTokens ? <span className="mono" style={{ fontSize: 12 }}>{firedTokens}</span> : <Muted>none</Muted>
-          } />
+          } tipForLabel="ACMG/AMP criteria that fired for this variant, with strength tokens: _VS (Very Strong, +8), _S (Strong, +4), _M (Moderate, +2), _Sup (Supporting, +1), _BA (Stand-alone benign)." />
           <DRow label="Classification" value={
             <>
               <TierChip tier={v.baseline_tier} />
@@ -718,7 +730,7 @@ function ClinicalCard({ v }: { v: VariantRow }) {
                 <span style={{ marginLeft: 8 }}><ReclassBadge {...v.reclass} /></span>
               ) : null}
             </>
-          } />
+          } tipForLabel="ACMG tier: P (Pathogenic), LP (Likely Pathogenic), VUS (Uncertain), LB (Likely Benign), B (Benign). The reclass badge shows any change driven by Indian-cohort allele frequency." />
         </tbody>
       </table>
 
@@ -733,9 +745,15 @@ function ClinicalCard({ v }: { v: VariantRow }) {
               <tr>
                 <th style={{ textAlign: "left" }}>Role</th>
                 <th>Zygosity</th>
-                <th className="num">Depth</th>
-                <th className="num">AB</th>
-                <th className="num">GQ</th>
+                <th className="num">
+                  <abbr title="Read depth at the variant position (FORMAT/DP). Higher is more reliable; clinical threshold ≥10x for de novo calls.">Depth</abbr>
+                </th>
+                <th className="num">
+                  <abbr title="Allele balance — alt allele fraction = AD[alt] / (AD[ref] + AD[alt]). For a true heterozygous call expect ~50%; outside 0.20–0.80 suggests artifact.">AB</abbr>
+                </th>
+                <th className="num">
+                  <abbr title="Genotype quality (FORMAT/GQ). Phred-scaled confidence in the called genotype; clinical threshold ≥20 for de novo calls.">GQ</abbr>
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -787,14 +805,19 @@ function ZygosityChip({ zyg }: { zyg: string }) {
   );
 }
 
-function DRow({ label, value, mono }: { label: string; value: React.ReactNode; mono?: boolean }) {
+function DRow({ label, value, mono, tipForLabel }: {
+  label: string;
+  value: React.ReactNode;
+  mono?: boolean;
+  tipForLabel?: string;
+}) {
   if (value === null || value === undefined || value === "") return null;
   return (
     <tr>
       <td style={{ color: "var(--ink-soft)", fontSize: 12, padding: "3px 12px 3px 0", verticalAlign: "top", whiteSpace: "nowrap" }}>
-        {label}
+        {tipForLabel ? <abbr title={tipForLabel}>{label}</abbr> : label}
       </td>
-      <td className={mono ? "mono" : ""} style={{ padding: "3px 0", verticalAlign: "top" }}>
+      <td className={mono ? "mono" : ""} style={{ padding: "3px 0", verticalAlign: "top", wordBreak: "break-word" }}>
         {value}
       </td>
     </tr>
@@ -953,28 +976,64 @@ function LiveRerunBanner({
 /** Sortable column header. Click toggles direction; clicking a different
  * column makes that one active (default direction depends on the field). */
 function SortHeader({
-  label, sortKey, active, dir, onSort, numeric,
+  label, sortKey, active, dir, onSort, numeric, className,
 }: {
-  label: string;
+  label: React.ReactNode;
   sortKey: NonNullable<SortKey>;
   active: SortKey;
   dir: SortDir;
   onSort: (k: NonNullable<SortKey>) => void;
   numeric?: boolean;
+  className?: string;
 }) {
   const isActive = active === sortKey;
   const arrow = isActive ? (dir === "asc" ? " ▲" : " ▼") : "";
+  const classes = [numeric ? "num" : "", className ?? ""].filter(Boolean).join(" ");
   return (
     <th
-      className={numeric ? "num" : ""}
+      className={classes}
       onClick={() => onSort(sortKey)}
       style={{ cursor: "pointer", userSelect: "none" }}
-      title={`Sort by ${label}`}
     >
       <span>{label}</span>
       <span className="mono" style={{ color: "var(--ink-soft)", fontSize: 10 }}>{arrow}</span>
     </th>
   );
+}
+
+/** Compact consequence label. VEP terms are verbose; map to short forms for
+ * the table cell. Full term is preserved as the title attribute for tooltip. */
+function abbrevConsequence(cons?: string): string {
+  if (!cons) return "—";
+  const map: Record<string, string> = {
+    missense_variant: "missense",
+    synonymous_variant: "synonymous",
+    stop_gained: "stop gained",
+    stop_lost: "stop lost",
+    start_lost: "start lost",
+    frameshift_variant: "frameshift",
+    inframe_insertion: "in-frame ins",
+    inframe_deletion: "in-frame del",
+    splice_donor_variant: "splice donor",
+    splice_acceptor_variant: "splice acceptor",
+    splice_region_variant: "splice region",
+    splice_donor_5th_base_variant: "splice donor 5'",
+    splice_polypyrimidine_tract_variant: "splice ppt",
+    intron_variant: "intronic",
+    "5_prime_UTR_variant": "5' UTR",
+    "3_prime_UTR_variant": "3' UTR",
+    non_coding_transcript_exon_variant: "non-coding exon",
+    intergenic_variant: "intergenic",
+    upstream_gene_variant: "upstream",
+    downstream_gene_variant: "downstream",
+    protein_altering_variant: "protein altering",
+    coding_sequence_variant: "coding",
+    mature_miRNA_variant: "miRNA",
+    NMD_transcript_variant: "NMD",
+  };
+  // Take first/most-severe term if multi-valued, then abbreviate.
+  const first = cons.split(/[,&]/)[0].trim();
+  return map[first] ?? first.replace(/_variant$/, "").replace(/_/g, " ");
 }
 
 /** "Re-run analysis" button. Posts /api/cases/:id/rerun, which fetches the

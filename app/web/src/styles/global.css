@@ -138,6 +138,88 @@ input:focus, textarea:focus, select:focus {
   padding-left: 9px;
 }
 
+/* Variant table — fixed column widths so consequence/HGVS don't blow the
+   layout. Each cell truncates with ellipsis; mouse-over the cell to see
+   the full content via title attribute. */
+.variant-table { table-layout: fixed; }
+.variant-table th, .variant-table td {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 10px 8px;
+}
+.variant-table .col-check { width: 28px; }
+.variant-table .col-num   { width: 36px; }
+.variant-table .col-gene  { width: 8%; min-width: 80px; }
+.variant-table .col-hgvs  { width: 22%; }
+.variant-table .col-cons  { width: 11%; }
+.variant-table .col-inh   { width: 12%; }
+.variant-table .col-af    { width: 7%;  min-width: 60px; }
+.variant-table .col-tier  { width: 6%;  min-width: 56px; }
+.variant-table .col-delta { width: 7%;  min-width: 60px; }
+
+/* Below 1100px hide low-priority columns rather than wrap. The drawer
+   still shows everything. */
+@media (max-width: 1100px) {
+  .variant-table .col-inh,
+  .variant-table th.col-inh,
+  .variant-table td.col-inh,
+  .variant-table .col-af-indi { display: none; }
+}
+@media (max-width: 900px) {
+  .variant-table .col-cons,
+  .variant-table th.col-cons,
+  .variant-table td.col-cons,
+  .variant-table .col-af-sas { display: none; }
+}
+
+/* Drawer — sticky on desktop with internal scroll; full-screen modal
+   on mobile so the user can review the clinical card without fighting
+   page scroll. */
+.variant-drawer {
+  align-self: start;
+  position: sticky;
+  top: 16px;
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+@media (max-width: 900px) {
+  .variant-drawer {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    max-height: 100vh;
+    z-index: 100;
+    border-radius: 0;
+    border-left: 0; border-right: 0; border-top: 0;
+  }
+  /* When drawer overlay is open, dim the table behind it. */
+  .workbench-grid.drawer-open .workbench-table { opacity: 0.5; pointer-events: none; }
+}
+
+/* Responsive 2-column grid: drawer is a fixed-width side panel on
+   desktop, full-width below it on mobile (handled by the .variant-drawer
+   override above to position:fixed). */
+.workbench-grid {
+  display: grid;
+  grid-template-columns: 1fr 460px;
+  gap: 16px;
+  align-items: start;
+}
+.workbench-grid.no-drawer { grid-template-columns: 1fr; }
+@media (max-width: 900px) {
+  .workbench-grid,
+  .workbench-grid.no-drawer { grid-template-columns: 1fr; }
+}
+
+/* abbr[title] — make the dotted underline look intentional and hint
+   that there's a tooltip on hover. Used for AB, GQ, AF SAS etc. */
+abbr[title] {
+  text-decoration: underline dotted var(--ink-soft);
+  text-underline-offset: 2px;
+  cursor: help;
+}
+
 /* Cards */
 .card {
   background: var(--surface);
