@@ -1,12 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Pedigree } from "../components/Pedigree";
 import { FileDropzone, type StagedFile } from "../components/FileDropzone";
 import { RunMonitor, useJobStatus } from "../components/RunMonitor";
 import { HpoSearch, type HpoHit } from "../components/HpoSearch";
-import { DEFAULT_TRIO, type PedigreeState } from "../types-pedigree";
+import { pedigreeForMode, type PedigreeState } from "../types-pedigree";
 import { autoMapSample, sniffFile } from "../vcfSniff";
 import { api } from "../apiBase";
+
+/** Mode → human label for the topbar pill. Drives only display; the engine
+ *  reasons about whichever members the pedigree contains. */
+const MODE_LABEL: Record<string, string> = {
+  singleton: "Singleton pipeline",
+  duo: "Duo pipeline",
+  trio: "Trio pipeline",
+};
 
 /** Case intake (design spec §4.2 + PRD §4.1). Vertical sectioned flow.
  * Final step uploads VCF/BAM to the dev API and triggers an engine run. */
@@ -37,12 +45,19 @@ type RunStage = "idle" | "uploading" | "submitted" | "error";
 
 export function Intake() {
   const navigate = useNavigate();
-  const [pedigree, setPedigree] = useState<PedigreeState>(DEFAULT_TRIO);
+  const [search] = useSearchParams();
+  // Pipeline mode comes in via /cases/new?mode=singleton|duo|trio (set by the
+  // Home screen's pipeline picker). Seeds the initial pedigree shape;
+  // membership can still be edited freely in the pedigree widget.
+  const mode = (search.get("mode") ?? "trio").toLowerCase();
+  const [pedigree, setPedigree] = useState<PedigreeState>(() => pedigreeForMode(mode));
   const [hpo, setHpo] = useState<HPOEntry[]>([]);
   const [hpoInput, setHpoInput] = useState("");
   const [history, setHistory] = useState("");
   const [onsetAge, setOnsetAge] = useState("");
   const [priorTesting, setPriorTesting] = useState("");
+  const [familyHistory, setFamilyHistory] = useState("");
+  const [consanguinityNote, setConsanguinityNote] = useState("");
   const [staged, setStaged] = useState<StagedByRole>({});
   const [runStage, setRunStage] = useState<RunStage>("idle");
   const [runMsg, setRunMsg] = useState<string>("");
@@ -202,8 +217,18 @@ export function Intake() {
           missing: !!m.missing,
         })),
         consanguineous: pedigree.consanguineous,
-        hpo: hpo.map((h) => h.id),
-        history,
+        hpo: hpo.map((h) => ({ id: h.id, label: h.label ?? null })),
+        // Clinical context — rendered on page 1 of the report. The engine
+        // stores this verbatim into CaseEmission.clinical_history; if any
+        // field is empty we still send it so the report layout stays stable.
+        clinical_history: {
+          text: history,
+          onset_age: onsetAge,
+          consanguinity_note: consanguinityNote,
+          family_history: familyHistory,
+          prior_testing: priorTesting,
+        },
+        history,  // back-compat for older engine builds expecting flat `history`
         files,
       };
       const runResp = await fetch(api(`/cases/${caseId}/run`), {
@@ -228,6 +253,9 @@ export function Intake() {
       <div className="topbar">
         <h1>New case</h1>
         <span className="pill mono">{caseId}</span>
+        <span className="pill" title={`Pipeline mode set from the home screen — ${mode}`}>
+          {MODE_LABEL[mode] ?? "Trio pipeline"}
+        </span>
         <span className="pill">
           {runStage === "idle" ? "Draft"
             : runStage === "uploading" ? "Uploading"
@@ -341,18 +369,34 @@ export function Intake() {
                 Prior testing
                 <input value={priorTesting} onChange={(e) => setPriorTesting(e.target.value)} placeholder="e.g. CMA normal" />
               </label>
+              <label style={{ display: "grid", gap: 4, fontSize: 12, color: "var(--ink-soft)" }}>
+                Consanguinity notes
+                <input
+                  value={consanguinityNote}
+                  onChange={(e) => setConsanguinityNote(e.target.value)}
+                  placeholder="e.g. First-cousin parents"
+                />
+              </label>
+              <label style={{ display: "grid", gap: 4, fontSize: 12, color: "var(--ink-soft)" }}>
+                Family history
+                <input
+                  value={familyHistory}
+                  onChange={(e) => setFamilyHistory(e.target.value)}
+                  placeholder="e.g. Affected paternal cousin"
+                />
+              </label>
             </div>
             <textarea
               value={history}
               onChange={(e) => setHistory(e.target.value)}
               rows={6}
               style={{ width: "100%", marginTop: 12 }}
-              placeholder="Onset, course, family history, prior testing..."
+              placeholder="Onset, course, examination findings, imaging, prior testing — anything relevant to interpretation. Free text. Used verbatim on the report's first page."
             />
             <p style={{ color: "var(--ink-soft)", marginTop: 8, fontSize: 12 }}>
               {suggested.length
                 ? `${suggested.length} HPO ${suggested.length === 1 ? "term" : "terms"} suggested above — click + to confirm.`
-                : "Save history to surface LLM-extracted HPO candidates."}
+                : "Save history to surface LLM-extracted HPO candidates. Fields populated here render on page 1 of the report."}
             </p>
           </section>
 

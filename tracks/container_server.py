@@ -61,7 +61,7 @@ from variantgpt_engine.build_detect import detect_build  # noqa: E402
 from variantgpt_engine.filter import filter_candidates, proband_carrier_filter  # noqa: E402
 from variantgpt_engine.inheritance import assign_models, compound_het_pass  # noqa: E402
 from variantgpt_engine.joint import merge  # noqa: E402
-from variantgpt_engine.models import Build, CaseEmission, HPOTerm, Variant  # noqa: E402
+from variantgpt_engine.models import Build, CaseEmission, ClinicalHistory, HPOTerm, Variant  # noqa: E402
 from variantgpt_engine.preprocess import PreprocessConfig, preprocess_vcf  # noqa: E402
 from variantgpt_engine.prioritize import priority  # noqa: E402
 from variantgpt_engine.qc import compute_qc  # noqa: E402
@@ -460,7 +460,17 @@ async def _execute_job(job: dict[str, Any]) -> None:
 
             # Do the entire annotate→classify→priority sweep in a single
             # worker thread per chunk (see chunked loop below).
-            hpo_ids = manifest.get("hpo", [])
+            # HPO terms — the manifest may carry either bare ids (legacy) or
+            # {id, label} objects (post-Intake-clinical-fields). Normalize to
+            # a list of (id, label|None) tuples so downstream code is stable.
+            raw_hpo = manifest.get("hpo", [])
+            hpo_entries: list[tuple[str, str | None]] = []
+            for h in raw_hpo:
+                if isinstance(h, str):
+                    hpo_entries.append((h, None))
+                elif isinstance(h, dict) and h.get("id"):
+                    hpo_entries.append((h["id"], h.get("label")))
+            hpo_ids = [hid for hid, _ in hpo_entries]
 
             # Checkpoint: load any previously-classified variants from cache,
             # then process the remainder in chunks. Each chunk is 500 variants
@@ -665,11 +675,24 @@ async def _execute_job(job: dict[str, Any]) -> None:
                 reclassify_all, variants, snapshot_versions=track_versions
             )
 
+            # Clinical history block — passed verbatim from Intake. All
+            # fields optional; we still emit the object so the SPA's report
+            # layout stays stable.
+            ch_raw = manifest.get("clinical_history") or {}
+            clinical_history = ClinicalHistory(
+                text=ch_raw.get("text") or manifest.get("history", "") or "",
+                onset_age=ch_raw.get("onset_age") or None,
+                consanguinity_note=ch_raw.get("consanguinity_note") or None,
+                prior_testing=ch_raw.get("prior_testing") or None,
+                family_history=ch_raw.get("family_history") or None,
+            )
+
             emission = CaseEmission(
                 case_id=case_id,
                 build=resolved_build,
                 pedigree=pedigree,
-                hpo=[HPOTerm(hpo_id=h) for h in hpo_ids],
+                hpo=[HPOTerm(hpo_id=hid, label=lbl) for hid, lbl in hpo_entries],
+                clinical_history=clinical_history,
                 qc=qc,
                 variants=variants,
                 proposals=proposals,
