@@ -244,9 +244,11 @@ async function _continueRun(
     //         hgvs=1, numbers=1, mane=1). Force rebuild so cached CSQ
     //         entries pick up the new fields.
     csq: await signCacheStage("csq_v2"),
-    // variants_v3: omim_id field added (mygene.info lookup) + transcript
-    //              now prefers MANE Select (NM_ accession). Bump again.
-    variants: await signCacheStage("variants_v3"),
+    // variants_v4: removed per-variant synchronous gnomAD lookup from
+    //              annotate() (it was the real bottleneck — 60s/chunk —
+    //              and the data is redundant with the myvariant.info
+    //              ClinVar/dbNSFP batched fetch that runs right after).
+    variants: await signCacheStage("variants_v4"),
   };
 
   // (No reference tracks signed currently. IndiGenomes lookup pivoted to

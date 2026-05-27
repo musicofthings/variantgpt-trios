@@ -445,8 +445,15 @@ async def _execute_job(job: dict[str, Any]) -> None:
             ctx = AnnotationContext(
                 build=resolved_build.value,
                 track_versions=track_versions,
-                # Live gnomAD on real-mode survivors (already filtered down).
-                use_gnomad=real_mode,
+                # DO NOT enable per-variant live gnomAD here. _population_af()
+                # calls gnomad.lookup() SYNCHRONOUSLY for each variant, which
+                # serialized at ~120ms each turns annotate+classify into a
+                # 60-second-per-500-variant crawl (network-bound). The same
+                # gnomAD AC/AN/AF/SAS data lands on v.populations a few stages
+                # later via the batched myvariant.info ClinVar overlay (200
+                # vars / round-trip, 10-way concurrent). Setting this to True
+                # only duplicates that work and gets overwritten.
+                use_gnomad=False,
                 gnomad_timeout=5.0,
                 use_demo_annotations=not real_mode,
             )
