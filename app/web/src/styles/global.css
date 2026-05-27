@@ -627,3 +627,72 @@ abbr[title] {
   font-size: 12px;
   font-family: var(--font-mono);
 }
+
+/* ── Print: clinical-report layout ─────────────────────────────────────────
+   When the user hits "Print / PDF" we want a clean, paginated, white-paper
+   layout — not the app's screen chrome. */
+@media print {
+  @page {
+    size: A4;
+    margin: 16mm 14mm;
+  }
+  html, body, #root, .app, .main {
+    background: #fff !important;
+    color: #000 !important;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    display: block !important;
+  }
+  body { font-size: 11pt; line-height: 1.4; }
+
+  /* Hide everything that isn't the report itself. */
+  .rail, .topbar, .no-print, .variant-drawer { display: none !important; }
+  .main { padding: 0 !important; margin: 0 !important; max-width: none !important; }
+
+  /* Flatten cards — no borders/shadows on paper. */
+  .card {
+    border: none !important;
+    box-shadow: none !important;
+    background: transparent !important;
+    border-radius: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    max-width: none !important;
+  }
+  .report {
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* Each .report-page starts on a fresh sheet. */
+  .report-page {
+    page-break-before: always;
+    break-before: page;
+  }
+  .report-page:first-of-type {
+    page-break-before: auto;
+    break-before: auto;
+  }
+
+  /* Avoid splitting these elements awkwardly across pages. */
+  table, .keep-together { page-break-inside: avoid; break-inside: avoid; }
+  h2, h3, h4 { page-break-after: avoid; break-after: avoid; }
+  tr { page-break-inside: avoid; }
+
+  /* Links: keep visible but don't blue-underline noisily on print. */
+  a { color: #000 !important; text-decoration: none !important; }
+
+  /* Pill chips: render as bordered text labels on paper. */
+  .pill, [class*="Chip"] {
+    background: transparent !important;
+    border: 1px solid #444 !important;
+    color: #000 !important;
+  }
+
+  table.table th, table.table td {
+    border-color: #888 !important;
+  }
+}
+
