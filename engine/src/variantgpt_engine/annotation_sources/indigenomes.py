@@ -252,20 +252,69 @@ async def fetch_for_variants_async(
     return merged
 
 
+def _vcf_to_annovar(ref: str, alt: str, pos: int) -> tuple[str, str, int]:
+    """Convert a VCF-style allele pair to ANNOVAR-style (used by IndiGen).
+
+    Examples:
+      SNV         A > T,            pos N   →  A > T,    pos N      (unchanged)
+      Insertion   G > GTTAT,        pos N   →  - > TTAT, pos N      (insertion stays at anchor)
+      Deletion    TA > T,           pos N   →  A > -,    pos N+1    (anchor stripped, pos++)
+      delins      AC > GT,          pos N   →  AC > GT,  pos N      (no anchor to strip)
+
+    Per ANNOVAR convention. IndiGen records use this representation in the
+    Chr/Start/Ref/Alt fields returned by data.php. Without reference genome
+    access we can canonicalize VCF→ANNOVAR cleanly (the inverse needs an
+    anchor base lookup).
+    """
+    if not ref or not alt:
+        return ref, alt, pos
+    if len(ref) == 1 and len(alt) == 1:
+        return ref, alt, pos  # SNV
+    # Trim shared prefix (left-alignment).
+    while len(ref) > 1 and len(alt) > 1 and ref[0] == alt[0]:
+        ref, alt = ref[1:], alt[1:]
+        pos += 1
+    # Insertion: ref="G", alt="GTTAT" (after trim: ref="", alt="TTAT") — but
+    # standard VCF requires ref to keep one anchor base. Detect post-trim:
+    if len(ref) >= 1 and len(alt) > len(ref) and alt.startswith(ref):
+        return "-", alt[len(ref):], pos
+    # Deletion: ref="TA", alt="T" (after trim: ref="A", alt="") OR full anchor
+    if len(alt) >= 1 and len(ref) > len(alt) and ref.startswith(alt):
+        return ref[len(alt):], "-", pos + len(alt)
+    return ref, alt, pos
+
+
 def apply_indigen_to_variants(
     variants: list[Variant],
     af_map: dict[tuple[str, int, str, str], dict],
-) -> int:
+) -> tuple[int, int, int]:
     """Append an indigenomes PopulationAF row to each variant that has a
-    matching IndiGen record. Returns the count of variants annotated."""
-    n = 0
+    matching IndiGen record. Returns (hits, snv_attempts, indel_attempts).
+
+    Two-pass match per variant:
+      1. Try the literal VCF key (chrom, pos, ref, alt). Catches SNVs and
+         any variant IndiGen happens to store in VCF form.
+      2. Try the ANNOVAR-converted key (anchor stripped, pos adjusted).
+         Catches insertions/deletions that IndiGen stores ANNOVAR-style.
+    """
+    hits = 0
+    snv_attempts = 0
+    indel_attempts = 0
     for v in variants:
-        key = (_normalize_chrom(v.chrom), v.pos, v.ref, v.alt)
-        rec = af_map.get(key)
+        is_snv = len(v.ref) == 1 and len(v.alt) == 1 and v.ref != "-" and v.alt != "-"
+        if is_snv:
+            snv_attempts += 1
+        else:
+            indel_attempts += 1
+        chrom = _normalize_chrom(v.chrom)
+
+        rec = af_map.get((chrom, v.pos, v.ref, v.alt))
+        if rec is None and not is_snv:
+            an_ref, an_alt, an_pos = _vcf_to_annovar(v.ref, v.alt, v.pos)
+            rec = af_map.get((chrom, an_pos, an_ref, an_alt))
+
         if rec is None:
             continue
-        # Drop any pre-existing indigenomes row (from a previous run / cached
-        # case.json) before appending — guarantees we never have stale data.
         v.populations = [p for p in v.populations if p.source != "indigenomes"]
         v.populations.append(PopulationAF(
             source="indigenomes",
@@ -273,8 +322,8 @@ def apply_indigen_to_variants(
             an=rec.get("an"),
             af=rec.get("af"),
         ))
-        n += 1
-    return n
+        hits += 1
+    return hits, snv_attempts, indel_attempts
 
 
 # ─── back-compat stubs (we deleted the bulk SQLite path) ───

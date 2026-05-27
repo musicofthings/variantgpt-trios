@@ -597,8 +597,12 @@ async def _execute_job(job: dict[str, Any]) -> None:
                         proxy_url=indigen_proxy_url,
                         proxy_bearer=indigen_proxy_bearer,
                     )
-                    indi_hits = indigenomes.apply_indigen_to_variants(variants, indi_map)
-                    emit(f"IndiGen: {indi_hits} variants annotated from {len(indi_map)} unique IndiGen records")
+                    indi_hits, snv_n, indel_n = indigenomes.apply_indigen_to_variants(variants, indi_map)
+                    emit(
+                        f"IndiGen: {indi_hits} variants annotated "
+                        f"from {len(indi_map)} unique IndiGen records "
+                        f"(SNVs attempted: {snv_n}, indels attempted: {indel_n})"
+                    )
                     # Echo the first few API responses to the engine log so we
                     # can see whether IGIB is returning data, empty, or errors.
                     last_dbg = getattr(indigenomes.fetch_for_variants_async, "last_debug", None)

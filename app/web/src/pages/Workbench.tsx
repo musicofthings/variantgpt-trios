@@ -127,16 +127,20 @@ export function Workbench() {
   const variants: VariantRow[] = data?.variants ?? (error && !isUploadedCase ? FALLBACK_MOCK : []);
   const caseName = data?.caseRow.name ?? (isUploadedCase ? `Case ${caseId}` : "Demo trio (loading…)");
 
-  // When the live re-run flips from running → ready, fetch the fresh case.json.
-  // We can't easily invalidate the useDemoCase cache so we just force a reload.
+  // Track when a run has just finished (running/queued → ready or error) so
+  // we can keep the banner visible with the final log, instead of auto-
+  // reloading and losing the run history.
   const wasRunning = useRef(false);
+  const [justFinished, setJustFinished] = useState<"ready" | "error" | null>(null);
   useEffect(() => {
     if (job?.status === "running" || job?.status === "queued") {
       wasRunning.current = true;
-    } else if (wasRunning.current && job?.status === "ready") {
+      setJustFinished(null);
+    } else if (wasRunning.current && (job?.status === "ready" || job?.status === "error")) {
       wasRunning.current = false;
-      // Hard refresh so the stale case.json + cached useDemoCase get re-pulled.
-      window.location.reload();
+      setJustFinished(job.status);
+      // Don't auto-reload: user wants to inspect the log. They click
+      // "Load new results" in the banner to refresh when ready.
     }
   }, [job?.status]);
 
@@ -285,11 +289,17 @@ export function Workbench() {
         </button>
       </div>
 
-      {/* Live re-run banner — visible whenever a job is queued/running and
-          we already have a prior case.json on screen. Auto-reloads when
-          the run completes. */}
-      {(liveRerun || liveQueued) ? (
-        <LiveRerunBanner status={job} caseId={caseId!} />
+      {/* Live re-run banner — visible whenever a job is queued/running OR
+          a job has just finished and we haven't reloaded yet. The user
+          decides when to refresh the variant table by clicking "Load new
+          results" in the banner. */}
+      {(liveRerun || liveQueued || justFinished) ? (
+        <LiveRerunBanner
+          status={job}
+          caseId={caseId!}
+          finished={justFinished}
+          onDismiss={() => setJustFinished(null)}
+        />
       ) : null}
 
       <div role="tablist" style={{ display: "flex", gap: 4, marginBottom: 16, flexWrap: "wrap" }}>
@@ -622,14 +632,28 @@ function fmt(v?: number | null): string {
   return v.toFixed(4);
 }
 
-/** Live re-run progress banner. Shown above the variant table while a
- *  fresh engine job is in flight on a case that already had results.
- *  The table below stays interactive (you're viewing the previous run);
- *  when the new run finishes, the page auto-refreshes. */
+/** Re-run banner. Three states:
+ *   - running/queued: live progress, last log line ticking, animated dot
+ *   - just finished (ready): green dot, "Load new results" button reloads
+ *     the page so the new case.json is fetched; the full log stays
+ *     inspectable until the user clicks "Dismiss"
+ *   - just finished (error): rust-colored, log expanded by default,
+ *     no auto-reload (table still shows the previous successful run)
+ *
+ * The log is now ALWAYS expandable — no more "disappears on completion"
+ * gap.
+ */
 function LiveRerunBanner({
-  status, caseId,
-}: { status: import("../components/RunMonitor").JobStatus | null; caseId: string }) {
-  const [expanded, setExpanded] = useState(false);
+  status, caseId, finished, onDismiss,
+}: {
+  status: import("../components/RunMonitor").JobStatus | null;
+  caseId: string;
+  finished: "ready" | "error" | null;
+  onDismiss: () => void;
+}) {
+  // Default to expanded on error so the user sees what failed.
+  const [expanded, setExpanded] = useState<boolean>(finished === "error");
+  const isRunning = !finished && (status?.status === "running" || status?.status === "queued");
   const lastLine = status?.log?.[status.log.length - 1] ?? "starting…";
   const elapsedSec = Math.floor((status?.elapsedMs ?? 0) / 1000);
   const elapsedTxt =
@@ -637,26 +661,39 @@ function LiveRerunBanner({
     : elapsedSec < 3600 ? `${Math.floor(elapsedSec / 60)}m ${elapsedSec % 60}s`
     : `${Math.floor(elapsedSec / 3600)}h ${Math.floor((elapsedSec % 3600) / 60)}m`;
 
+  const accent =
+    finished === "error" ? "var(--rust, #b04a2a)"
+    : finished === "ready" ? "var(--success, #2c8462)"
+    : "var(--accent, #b04a2a)";
+  const bg =
+    finished === "error" ? "rgba(180,84,30,0.06)"
+    : finished === "ready" ? "rgba(44,132,98,0.06)"
+    : "rgba(180,84,30,0.04)";
+  const headline =
+    finished === "error" ? "Run failed"
+    : finished === "ready" ? "Run completed"
+    : "Re-run in progress";
+
   return (
     <div
       style={{
         marginBottom: 12,
-        border: "1px solid var(--accent, #b04a2a)",
+        border: `1px solid ${accent}`,
         borderRadius: 6,
-        background: "rgba(180,84,30,0.04)",
+        background: bg,
         padding: "10px 14px",
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
         <span style={{
           display: "inline-block", width: 10, height: 10, borderRadius: "50%",
-          background: "var(--accent, #b04a2a)",
-          animation: "pulse 1.5s infinite",
+          background: accent,
+          animation: isRunning ? "pulse 1.5s infinite" : "none",
         }} />
-        <strong>Re-run in progress</strong>
+        <strong>{headline}</strong>
         <span className="pill mono">{status?.status ?? "queued"}</span>
         <span className="mono" style={{ color: "var(--ink-soft)", fontSize: 12 }}>
-          {elapsedTxt} elapsed
+          {elapsedTxt} {finished ? "total" : "elapsed"}
         </span>
         <span style={{ flex: 1, color: "var(--ink-soft)", fontSize: 13, fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {lastLine}
@@ -664,6 +701,14 @@ function LiveRerunBanner({
         <button onClick={() => setExpanded((e) => !e)}>
           {expanded ? "Hide log ▾" : "Show log ▸"}
         </button>
+        {finished === "ready" ? (
+          <button className="primary" onClick={() => window.location.reload()}>
+            Load new results
+          </button>
+        ) : null}
+        {finished ? (
+          <button onClick={onDismiss} aria-label="Dismiss banner">×</button>
+        ) : null}
       </div>
       {expanded ? (
         <pre
@@ -672,19 +717,32 @@ function LiveRerunBanner({
             marginTop: 10, marginBottom: 0, padding: 10,
             background: "var(--paper-soft, #f6f1e6)",
             borderRadius: 4, fontSize: 12, lineHeight: 1.5,
-            maxHeight: 280, overflowY: "auto",
+            maxHeight: 400, overflowY: "auto",
           }}
         >
           {status?.log?.length ? status.log.join("\n") : "Waiting for engine output…"}
         </pre>
       ) : null}
-      <div style={{ marginTop: 6, fontSize: 12, color: "var(--ink-soft)" }}>
-        Viewing the previous run's results below. The table will refresh
-        automatically when the new run completes — or you can{" "}
-        <a href={`/cases/${caseId}`} onClick={(e) => { e.preventDefault(); window.location.reload(); }}>
-          refresh manually
-        </a>.
-      </div>
+      {!finished ? (
+        <div style={{ marginTop: 6, fontSize: 12, color: "var(--ink-soft)" }}>
+          Viewing the previous run's results below. Click <strong>Load new results</strong>
+          {" "}when the run completes — or{" "}
+          <a href={`/cases/${caseId}`} onClick={(e) => { e.preventDefault(); window.location.reload(); }}>
+            refresh manually
+          </a>.
+        </div>
+      ) : finished === "ready" ? (
+        <div style={{ marginTop: 6, fontSize: 12, color: "var(--ink-soft)" }}>
+          New case.json is in R2. Click <strong>Load new results</strong> to view it,
+          or keep inspecting the previous run.
+        </div>
+      ) : (
+        <div style={{ marginTop: 6, fontSize: 12, color: "var(--rust, #b04a2a)" }}>
+          The new run failed. The variant table below still shows the previous
+          successful run. Use <strong>Re-run analysis</strong> after fixing whatever
+          went wrong.
+        </div>
+      )}
     </div>
   );
 }
