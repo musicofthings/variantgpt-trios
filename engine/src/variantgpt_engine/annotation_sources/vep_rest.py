@@ -69,7 +69,24 @@ async def annotate_batch_async(
         async def fetch_batch(chunk: list[JointVariant]) -> int:
             nonlocal done
             async with sem:
-                payload = {"variants": [_vep_region(jv) for jv in chunk]}
+                # Enable all clinically-relevant annotations:
+                #   hgvs=1       → hgvsc/hgvsp on each transcript_consequence
+                #   numbers=1    → exon/intron rank ("14/57")
+                #   mane=1       → MANE Select NM_ refseq transcript
+                #   canonical=1  → canonical transcript flag
+                #   protein=1    → protein-level consequence (amino acids)
+                #   symbol=1     → gene_symbol (often default, explicit)
+                #   domains=1    → Pfam/PROSITE domain hits
+                payload = {
+                    "variants": [_vep_region(jv) for jv in chunk],
+                    "hgvs": 1,
+                    "numbers": 1,
+                    "mane": 1,
+                    "canonical": 1,
+                    "protein": 1,
+                    "symbol": 1,
+                    "domains": 1,
+                }
                 try:
                     resp = await client.post(
                         VEP_URL,
@@ -145,5 +162,16 @@ def _project(vep_entry: dict) -> list[dict[str, str]]:
             "HGVSp": tc.get("hgvsp", "") or "",
             "CANONICAL": "YES" if tc.get("canonical") else "",
             "MANE_SELECT": tc.get("mane_select", "") or "",
+            # numbers=1 gives us exon/intron rank, e.g. "14/57". Either may
+            # be empty when not in the relevant feature.
+            "EXON": tc.get("exon", "") or "",
+            "INTRON": tc.get("intron", "") or "",
+            # Protein context.
+            "Amino_acids": tc.get("amino_acids", "") or "",
+            "Codons": tc.get("codons", "") or "",
+            # Domain hits if any.
+            "DOMAINS": ",".join(
+                (d.get("name") or "") for d in (tc.get("domains") or []) if isinstance(d, dict)
+            ),
         })
     return out

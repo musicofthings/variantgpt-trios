@@ -240,8 +240,13 @@ async function _continueRun(
   }
   const cacheUrls = {
     af_map: await signCacheStage("af_map"),
-    csq: await signCacheStage("csq"),
-    variants: await signCacheStage("variants_v2"),
+    // csq_v2: VEP REST now returns hgvs/exon/MANE_SELECT fields (added flags
+    //         hgvs=1, numbers=1, mane=1). Force rebuild so cached CSQ
+    //         entries pick up the new fields.
+    csq: await signCacheStage("csq_v2"),
+    // variants_v3: omim_id field added (mygene.info lookup) + transcript
+    //              now prefers MANE Select (NM_ accession). Bump again.
+    variants: await signCacheStage("variants_v3"),
   };
 
   // (No reference tracks signed currently. IndiGenomes lookup pivoted to

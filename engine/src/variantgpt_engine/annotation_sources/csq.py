@@ -50,7 +50,9 @@ def apply_csq(v: Variant, jv: JointVariant) -> bool:
         return False
     # Some VEP outputs prefix gene symbol in SYMBOL; Ensembl gene id in Gene.
     gene = chosen.get("SYMBOL") or chosen.get("Gene") or None
-    transcript = chosen.get("Feature") or chosen.get("MANE_SELECT") or None
+    # Prefer MANE Select (NM_ RefSeq accession) since that's the clinical
+    # standard transcript the lab report uses. Fall back to Ensembl ID.
+    transcript = chosen.get("MANE_SELECT") or chosen.get("Feature") or None
     # HGVSc/HGVSp may be prefixed with transcript:; strip the prefix for UI cleanliness.
     hgvs_c = _strip_prefix(chosen.get("HGVSc"))
     hgvs_p = _strip_prefix(chosen.get("HGVSp"))

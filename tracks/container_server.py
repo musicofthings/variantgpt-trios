@@ -54,7 +54,7 @@ sys.path.insert(0, str(THIS.parents[1] / "engine" / "src"))
 from variantgpt_engine.pedigree import load_ped  # noqa: E402
 from variantgpt_engine.acmg import classify  # noqa: E402
 from variantgpt_engine.annotation import AnnotationContext, annotate  # noqa: E402
-from variantgpt_engine.annotation_sources import indigenomes, myvariant, vep_rest  # noqa: E402
+from variantgpt_engine.annotation_sources import indigenomes, mygene, myvariant, vep_rest  # noqa: E402
 from variantgpt_engine.annotation_sources.csq import pick_canonical  # noqa: E402
 from variantgpt_engine import cache  # noqa: E402
 from variantgpt_engine.build_detect import detect_build  # noqa: E402
@@ -614,6 +614,22 @@ async def _execute_job(job: dict[str, Any]) -> None:
                 except Exception as e:  # noqa: BLE001
                     emit(f"IndiGen: lookup failed (continuing without): {type(e).__name__}: {e}")
                 await post_status("running")
+
+            # OMIM gene IDs via mygene.info — batched gene-symbol lookup. Quick
+            # (~1 round-trip per 500 symbols) so we don't bother with progress
+            # emits. Provides the OMIM* number for the drawer's "OMIM gene"
+            # link to https://www.omim.org/entry/<id>.
+            if real_mode and variants:
+                unique_genes = {v.gene for v in variants if v.gene}
+                if unique_genes:
+                    emit(f"OMIM: gene lookup for {len(unique_genes)} unique genes via mygene.info")
+                    try:
+                        omim_map = await mygene.fetch_omim_for_symbols(unique_genes)
+                        applied = mygene.apply_omim_to_variants(variants, omim_map)
+                        emit(f"OMIM: {applied} variants got an omim_id ({len(omim_map)} genes resolved)")
+                    except Exception as e:  # noqa: BLE001
+                        emit(f"OMIM: lookup failed (continuing without): {type(e).__name__}: {e}")
+                    await post_status("running")
 
             emit("reclassifying (Indian-cohort baseline)")
             proposals = await asyncio.to_thread(
