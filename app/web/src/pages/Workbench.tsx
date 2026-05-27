@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { TierChip } from "../components/TierChip";
 import { ReclassBadge } from "../components/ReclassBadge";
 import { EvidenceLedger } from "../components/EvidenceLedger";
@@ -120,29 +120,37 @@ export function Workbench() {
   // and auto-reload when status flips back to ready.
   const job = useJobStatus(isUploadedCase ? caseId : undefined);
   const showMonitor = isUploadedCase && !data && (job?.status !== "ready" || error);
-  // Live re-run is in progress when a job exists, isn't terminal, AND we DO
-  // have prior case data (otherwise the showMonitor branch covers it).
-  const liveRerun = !!data && job?.status === "running";
-  const liveQueued = !!data && job?.status === "queued";
   const variants: VariantRow[] = data?.variants ?? (error && !isUploadedCase ? FALLBACK_MOCK : []);
   const caseName = data?.caseRow.name ?? (isUploadedCase ? `Case ${caseId}` : "Demo trio (loading…)");
 
-  // Track when a run has just finished (running/queued → ready or error) so
-  // we can keep the banner visible with the final log, instead of auto-
-  // reloading and losing the run history.
-  const wasRunning = useRef(false);
-  const [justFinished, setJustFinished] = useState<"ready" | "error" | null>(null);
-  useEffect(() => {
-    if (job?.status === "running" || job?.status === "queued") {
-      wasRunning.current = true;
-      setJustFinished(null);
-    } else if (wasRunning.current && (job?.status === "ready" || job?.status === "error")) {
-      wasRunning.current = false;
-      setJustFinished(job.status);
-      // Don't auto-reload: user wants to inspect the log. They click
-      // "Load new results" in the banner to refresh when ready.
-    }
-  }, [job?.status]);
+  // Banner is dismissible per-case. Once the user clicks ✕ on the banner
+  // for a given case+startedAt, we stop showing it. Returns automatically
+  // if a new run starts (different startedAt).
+  const dismissKey = caseId ? `vgpt:banner-dismissed:${caseId}` : "";
+  const [bannerDismissedAt, setBannerDismissedAt] = useState<number | null>(() => {
+    if (!dismissKey) return null;
+    const v = localStorage.getItem(dismissKey);
+    return v ? Number(v) : null;
+  });
+
+  // Track most recent terminal state for this case (used to color the banner
+  // appropriately when we land mid-run vs after-the-fact). Always show
+  // banner if there's a job with log content, regardless of when we joined.
+  const justFinished: "ready" | "error" | null =
+    job?.status === "ready" ? "ready"
+    : job?.status === "error" ? "error"
+    : null;
+
+  // Dismiss state — banner stays hidden until next run starts.
+  const isDismissed = bannerDismissedAt !== null
+    && job?.startedAt != null
+    && bannerDismissedAt >= job.startedAt;
+
+  function dismissBanner() {
+    if (!dismissKey || !job?.startedAt) return;
+    localStorage.setItem(dismissKey, String(job.startedAt));
+    setBannerDismissedAt(job.startedAt);
+  }
 
   // Selection state — persisted per case so navigating away and back keeps picks.
   const [selectedForReport, setSelectedForReport] = useState<Set<string>>(() => {
@@ -289,16 +297,16 @@ export function Workbench() {
         </button>
       </div>
 
-      {/* Live re-run banner — visible whenever a job is queued/running OR
-          a job has just finished and we haven't reloaded yet. The user
-          decides when to refresh the variant table by clicking "Load new
-          results" in the banner. */}
-      {(liveRerun || liveQueued || justFinished) ? (
+      {/* Run banner — visible for any job state (running / queued / ready /
+          error) as long as we have job data AND the user hasn't dismissed
+          this run's banner. Lets the user inspect the engine log even when
+          they arrive after the run completed. */}
+      {job && (job.log?.length ?? 0) > 0 && !isDismissed ? (
         <LiveRerunBanner
           status={job}
           caseId={caseId!}
           finished={justFinished}
-          onDismiss={() => setJustFinished(null)}
+          onDismiss={dismissBanner}
         />
       ) : null}
 
