@@ -168,6 +168,34 @@ def assign_models(
             if parent_affected_carriers:
                 models.append("ad_inherited")
 
+        # het_inherited: het in proband, transmitted from at least one parent
+        # who is in the call set (regardless of affected status). Catches
+        # everything that isn't de_novo, isn't ad_inherited (parent affected),
+        # and isn't yet known to be comp_het (gene-aware pass runs separately).
+        # In a clinical setting these are: AR carriers, candidate
+        # single-hits-awaiting-trans-partner, and low-penetrance AD variants.
+        # Far more useful as a labelled bucket than "unresolved".
+        if gt == 1:
+            parent_carriers = [
+                p for p in (fa, mo)
+                if p and (variant.genotypes.get(p) or 0) >= 1
+            ]
+            if parent_carriers and "ad_inherited" not in models and "de_novo" not in models:
+                models.append("het_inherited")
+
+        # hom_alt in proband but the ar_hom check above didn't fire (one parent
+        # is 0/0, so it's Mendelian-inconsistent — likely a missed parental
+        # call). Still inherited at least partially; label as het_inherited so
+        # it's not lost in "unresolved".
+        if gt == 2 and "ar_hom" not in models:
+            parent_carriers = [
+                p for p in (fa, mo)
+                if p and (variant.genotypes.get(p) or 0) >= 1
+            ]
+            if parent_carriers:
+                models.append("het_inherited")
+                confidence = "low"   # Mendelian-inconsistent hom — flag low.
+
         if is_x:
             models.append("x_linked_recessive" if gt == 2 or members[proband_id].sex == Sex.male else "x_linked_dominant")
         if is_y:

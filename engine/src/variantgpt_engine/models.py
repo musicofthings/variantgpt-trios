@@ -71,6 +71,10 @@ InheritanceModel = Literal[
     "ar_hom",
     "comp_het",
     "ad_inherited",
+    "het_inherited",     # proband heterozygous; transmitted from an unaffected
+                         # parent (AR carrier / low-penetrance AD / awaiting a
+                         # second hit for comp_het). Most inherited rare hets
+                         # land here.
     "x_linked_recessive",
     "x_linked_dominant",
     "y_linked",

@@ -248,10 +248,11 @@ async function _continueRun(
     //              annotate() (it was the real bottleneck — 60s/chunk —
     //              and the data is redundant with the myvariant.info
     //              ClinVar/dbNSFP batched fetch that runs right after).
-    // variants_v5: added hpo_matches field (gene↔HPO phenotype matching against
-    //              case HPO terms). Bump invalidates v4 caches so the new
-    //              schema gets populated on the next run.
-    variants: await signCacheStage("variants_v5"),
+    // variants_v6: new het_inherited inheritance model (proband het transmitted
+    //              from an unaffected parent — most rare hets land here
+    //              instead of "unresolved"). Bump invalidates v5 caches so
+    //              the new classification populates on the next run.
+    variants: await signCacheStage("variants_v6"),
   };
 
   // (No reference tracks signed currently. IndiGenomes lookup pivoted to

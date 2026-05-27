@@ -24,6 +24,7 @@ const TABS: { label: string; match: (v: VariantRow) => boolean }[] = [
   { label: "Compound het",     match: (v) => v.inheritance_models.includes("comp_het") },
   { label: "Recessive",        match: (v) => v.inheritance_models.includes("ar_hom") },
   { label: "Dominant",         match: (v) => v.inheritance_models.includes("ad_inherited") },
+  { label: "Het inherited",    match: (v) => v.inheritance_models.includes("het_inherited") },
   { label: "X-linked",         match: (v) =>
       v.inheritance_models.includes("x_linked_recessive") ||
       v.inheritance_models.includes("x_linked_dominant") },
@@ -914,6 +915,7 @@ function humanizeModel(m: InheritanceModel): string {
     case "ar_hom": return "AR hom";
     case "comp_het": return "comp het";
     case "ad_inherited": return "AD inh.";
+    case "het_inherited": return "het inh.";
     case "x_linked_recessive": return "XLR";
     case "x_linked_dominant": return "XLD";
     case "y_linked": return "Y-linked";

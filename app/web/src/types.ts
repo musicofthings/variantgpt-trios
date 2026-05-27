@@ -1,7 +1,7 @@
 export type Tier = "P" | "LP" | "VUS" | "LB" | "B";
 
 export type InheritanceModel =
-  | "de_novo" | "ar_hom" | "comp_het" | "ad_inherited"
+  | "de_novo" | "ar_hom" | "comp_het" | "ad_inherited" | "het_inherited"
   | "x_linked_recessive" | "x_linked_dominant" | "y_linked" | "mitochondrial" | "unresolved";
 
 export type CriterionStrength =
