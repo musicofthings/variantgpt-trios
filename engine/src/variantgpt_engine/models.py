@@ -133,6 +133,18 @@ class ClinVarRecord(BaseModel):
     variation_id: Optional[str] = None                 # ClinVar Variation accession (e.g. "VCV000017604")
 
 
+class MemberCall(BaseModel):
+    """Per-member genotype call summary projected onto the Variant model
+    so the clinical drawer can show zygosity / depth / allele balance per
+    family member without re-parsing the joint matrix."""
+    member_id: str
+    role: str                                          # "proband" | "father" | "mother" | ...
+    zygosity: Literal["hom_ref", "het", "hom_alt", "missing"] = "missing"
+    depth: Optional[int] = None
+    allele_balance: Optional[float] = None             # alt / (ref+alt) from FORMAT/AD
+    gq: Optional[int] = None
+
+
 class Variant(BaseModel):
     id: str
     chrom: str
@@ -144,8 +156,12 @@ class Variant(BaseModel):
     hgvs_c: Optional[str] = None
     hgvs_p: Optional[str] = None
     consequence: Optional[str] = None
+    exon: Optional[str] = None                         # e.g. "14/45" — VEP CSQ EXON field
+    genomic_hgvs: Optional[str] = None                 # e.g. "chr5:g.14363831C>T"
+    omim_id: Optional[str] = None                      # OMIM gene id (the * number)
     inheritance_models: list[InheritanceModel] = Field(default_factory=list)
     inheritance_confidence: Literal["high", "medium", "low"] = "medium"
+    calls: list[MemberCall] = Field(default_factory=list)
     populations: list[PopulationAF] = Field(default_factory=list)
     predictors: PredictorScores = Field(default_factory=PredictorScores)
     clinvar: Optional[ClinVarRecord] = None

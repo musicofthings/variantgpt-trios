@@ -493,7 +493,9 @@ async def _execute_job(job: dict[str, Any]) -> None:
                     out_chunk: list[Variant] = []
                     for jv in sub:
                         models, conf = assign_models(jv, pedigree)
-                        v = annotate(jv, ctx)
+                        # Pass pedigree so per-member calls + genomic HGVS
+                        # land on the Variant for the clinical drawer.
+                        v = annotate(jv, ctx, pedigree=pedigree)
                         v.inheritance_models = models
                         v.inheritance_confidence = conf  # type: ignore[assignment]
                         tier, points, ledger = classify(v)

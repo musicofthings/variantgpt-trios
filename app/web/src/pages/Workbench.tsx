@@ -518,6 +518,7 @@ function Drawer({ variant, onClose }: { variant: VariantRow; onClose: () => void
           </div>
           <div style={{ color: "var(--ink-soft)", fontSize: 12, marginTop: 2 }}>
             {variant.consequence}
+            {variant.exon ? <> · exon {variant.exon}</> : null}
           </div>
         </div>
         <button onClick={onClose} aria-label="Close drawer">Close</button>
@@ -527,6 +528,11 @@ function Drawer({ variant, onClose }: { variant: VariantRow; onClose: () => void
         <TierChip tier={variant.baseline_tier} />
         {variant.reclass ? <ReclassBadge {...variant.reclass} /> : null}
       </div>
+
+      {/* Clinical variant card — lab-report style fielded summary. Matches the
+          Apollo Diagnostics layout (Gene, Variant, Zygosity, Depth, Disease
+          (OMIM), Classification with ACMG strength). */}
+      <ClinicalCard v={variant} />
 
       {variant.reclass ? (
         <div
@@ -603,6 +609,195 @@ function Drawer({ variant, onClose }: { variant: VariantRow; onClose: () => void
         </p>
       </Section>
     </aside>
+  );
+}
+
+/** Lab-report-style fielded summary at the top of the variant drawer.
+ *  Renders the same shape a clinical lab would: gene + transcript on one
+ *  side, genomic notation + HGVS on the other, zygosity / depth / AB
+ *  per family member in a small table, OMIM gene link, ACMG fired
+ *  criteria with strength tokens (PVS1, PM2_M, PP3_Sup, BS1_S, etc.). */
+function ClinicalCard({ v }: { v: VariantRow }) {
+  // Lab-report style: criterion + underscore + strength abbrev.
+  // VS=Very Strong, S=Strong, M=Moderate, P/Sup=Supporting, BA=StandAlone.
+  const STRENGTH_TOKEN: Record<string, string> = {
+    VeryStrong: "_VS",
+    Strong: "_S",
+    Moderate: "_M",
+    Supporting: "_Sup",
+    StandAlone: "_BA",
+  };
+  const fired = (v.evidence ?? []).filter((e) => e.fired);
+  const firedTokens = fired
+    .map((e) => `${e.criterion}${e.strength ? STRENGTH_TOKEN[e.strength] ?? "" : ""}`)
+    .join(", ");
+
+  // OMIM external link.
+  const omimUrl = v.omim_id ? `https://www.omim.org/entry/${v.omim_id}` : null;
+  // Gene-level external links.
+  const geneUrl = v.gene ? `https://www.genecards.org/cgi-bin/carddisp.pl?gene=${encodeURIComponent(v.gene)}` : null;
+  // ClinVar variant link if we have an accession.
+  const clinvarUrl = v.clinvar?.variation_id
+    ? `https://www.ncbi.nlm.nih.gov/clinvar/variation/${encodeURIComponent(v.clinvar.variation_id.replace(/^VCV0*/, ""))}/`
+    : null;
+
+  return (
+    <section
+      className="card"
+      style={{
+        marginTop: 16,
+        padding: 14,
+        background: "var(--paper-soft, #f6f1e6)",
+        borderColor: "var(--rule)",
+      }}
+    >
+      <div style={{ fontSize: 11, letterSpacing: "0.08em", color: "var(--ink-soft)", textTransform: "uppercase", marginBottom: 10 }}>
+        Clinical variant summary
+      </div>
+      <table style={{ width: "100%", fontSize: 13, lineHeight: 1.5, borderCollapse: "collapse" }}>
+        <tbody>
+          <DRow label="Gene" value={
+            geneUrl ? <a href={geneUrl} target="_blank" rel="noreferrer">{v.gene}</a> : v.gene
+          } />
+          <DRow label="Transcript" value={v.transcript} mono />
+          <DRow label="Location" value={v.exon ? `Exon ${v.exon}` : null} />
+          <DRow label="Variant (HGVS)" value={
+            <>
+              <span className="mono">{v.hgvs_c}</span>
+              {v.hgvs_p ? <span className="mono" style={{ color: "var(--ink-soft)" }}> ({v.hgvs_p})</span> : null}
+            </>
+          } />
+          <DRow label="Genomic" value={v.genomic_hgvs} mono />
+          <DRow label="Consequence" value={v.consequence} />
+          <DRow label="Inheritance" value={
+            v.inheritance_models.length
+              ? <>
+                  {v.inheritance_models.map(humanizeModel).join(", ")}
+                  {v.inheritance_confidence ? (
+                    <span style={{ color: "var(--ink-soft)", fontSize: 12 }}>
+                      {" "}· {v.inheritance_confidence} confidence
+                    </span>
+                  ) : null}
+                </>
+              : null
+          } />
+          <DRow label="OMIM gene" value={
+            omimUrl ? <a href={omimUrl} target="_blank" rel="noreferrer">{v.omim_id}</a> : null
+          } />
+          {v.clinvar ? (
+            <DRow label="ClinVar" value={
+              <>
+                {clinvarUrl ? (
+                  <a href={clinvarUrl} target="_blank" rel="noreferrer" className="mono">
+                    {v.clinvar.variation_id}
+                  </a>
+                ) : <span className="mono">{v.clinvar.variation_id}</span>}
+                {v.clinvar.clinical_significance ? (
+                  <> · <strong>{v.clinvar.clinical_significance}</strong></>
+                ) : null}
+                {v.clinvar.review_stars != null ? (
+                  <span style={{ color: "var(--ink-soft)", fontSize: 12 }}>
+                    {" "}({v.clinvar.review_stars}★ {v.clinvar.review_status})
+                  </span>
+                ) : null}
+                {v.clinvar.conditions && v.clinvar.conditions.length > 0 ? (
+                  <div style={{ marginTop: 2, fontSize: 12, color: "var(--ink-soft)" }}>
+                    {v.clinvar.conditions.slice(0, 3).join(" · ")}
+                  </div>
+                ) : null}
+              </>
+            } />
+          ) : null}
+          <DRow label="ACMG criteria fired" value={
+            firedTokens ? <span className="mono" style={{ fontSize: 12 }}>{firedTokens}</span> : <Muted>none</Muted>
+          } />
+          <DRow label="Classification" value={
+            <>
+              <TierChip tier={v.baseline_tier} />
+              {v.reclass ? (
+                <span style={{ marginLeft: 8 }}><ReclassBadge {...v.reclass} /></span>
+              ) : null}
+            </>
+          } />
+        </tbody>
+      </table>
+
+      {/* Per-member call table — zygosity / depth / AB / GQ for the trio. */}
+      {v.calls && v.calls.length > 0 ? (
+        <div style={{ marginTop: 14 }}>
+          <div style={{ fontSize: 11, letterSpacing: "0.06em", color: "var(--ink-soft)", textTransform: "uppercase", marginBottom: 6 }}>
+            Family calls
+          </div>
+          <table style={{ width: "100%", fontSize: 12, lineHeight: 1.4 }} className="table">
+            <thead>
+              <tr>
+                <th style={{ textAlign: "left" }}>Role</th>
+                <th>Zygosity</th>
+                <th className="num">Depth</th>
+                <th className="num">AB</th>
+                <th className="num">GQ</th>
+              </tr>
+            </thead>
+            <tbody>
+              {v.calls.map((c) => (
+                <tr key={c.member_id}>
+                  <td>{c.role}</td>
+                  <td>
+                    <ZygosityChip zyg={c.zygosity} />
+                  </td>
+                  <td className="num">{c.depth ?? "—"}{c.depth ? "x" : ""}</td>
+                  <td className="num">
+                    {c.allele_balance != null
+                      ? `${(c.allele_balance * 100).toFixed(1)}%`
+                      : "—"}
+                  </td>
+                  <td className="num">{c.gq ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function ZygosityChip({ zyg }: { zyg: string }) {
+  const labels: Record<string, string> = {
+    hom_ref: "Hom Ref",
+    het: "Heterozygous",
+    hom_alt: "Hom Alt",
+    missing: "—",
+  };
+  const colors: Record<string, string> = {
+    hom_ref: "var(--ink-soft)",
+    het: "var(--primary)",
+    hom_alt: "var(--accent, #b04a2a)",
+    missing: "var(--ink-soft)",
+  };
+  return (
+    <span style={{
+      fontSize: 11, padding: "2px 7px",
+      borderRadius: 999, border: "1px solid var(--rule)",
+      background: "var(--paper)",
+      color: colors[zyg] ?? "var(--ink)",
+    }}>
+      {labels[zyg] ?? zyg}
+    </span>
+  );
+}
+
+function DRow({ label, value, mono }: { label: string; value: React.ReactNode; mono?: boolean }) {
+  if (value === null || value === undefined || value === "") return null;
+  return (
+    <tr>
+      <td style={{ color: "var(--ink-soft)", fontSize: 12, padding: "3px 12px 3px 0", verticalAlign: "top", whiteSpace: "nowrap" }}>
+        {label}
+      </td>
+      <td className={mono ? "mono" : ""} style={{ padding: "3px 0", verticalAlign: "top" }}>
+        {value}
+      </td>
+    </tr>
   );
 }
 

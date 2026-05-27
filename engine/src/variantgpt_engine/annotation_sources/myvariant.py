@@ -49,6 +49,10 @@ FIELDS = ",".join([
     "clinvar.rcv.review_status",
     "clinvar.rcv.accession",
     "clinvar.variant_id",
+    # Gene-level (OMIM)
+    "dbnsfp.genename",
+    "dbnsfp.omim",
+    "dbnsfp.gene.omim_id",
     # gnomAD AFs (global + per-population). myvariant.info exposes both
     # gnomad_exome and gnomad_genome; we take whichever is present per
     # variant, preferring the joint signal (exomes + genomes) — myvariant
@@ -293,6 +297,21 @@ async def annotate_variants_async(
                     if pops:
                         v.populations = pops
                         local += 1
+                    # OMIM gene id (the *number) from dbnsfp.
+                    dbnsfp = entry.get("dbnsfp") or {}
+                    if isinstance(dbnsfp, dict) and not v.omim_id:
+                        # myvariant returns dbnsfp.omim as a list of strings sometimes.
+                        omim_v = dbnsfp.get("omim")
+                        if isinstance(omim_v, list) and omim_v:
+                            v.omim_id = str(omim_v[0])
+                        elif isinstance(omim_v, (str, int)):
+                            v.omim_id = str(omim_v)
+                        else:
+                            gene = dbnsfp.get("gene")
+                            if isinstance(gene, dict):
+                                go = gene.get("omim_id")
+                                if go:
+                                    v.omim_id = str(go)
                     try:
                         preds = _project_dbnsfp(entry.get("dbnsfp"))
                     except Exception as e:  # noqa: BLE001

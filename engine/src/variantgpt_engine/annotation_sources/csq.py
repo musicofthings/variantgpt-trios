@@ -55,6 +55,8 @@ def apply_csq(v: Variant, jv: JointVariant) -> bool:
     hgvs_c = _strip_prefix(chosen.get("HGVSc"))
     hgvs_p = _strip_prefix(chosen.get("HGVSp"))
     consequence = chosen.get("Consequence") or None
+    # EXON / INTRON come as "rank/total" e.g. "14/45". Keep as-is for the UI.
+    exon = chosen.get("EXON") or None
 
     changed = False
     if gene and not v.gene:
@@ -71,6 +73,9 @@ def apply_csq(v: Variant, jv: JointVariant) -> bool:
         changed = True
     if consequence and not v.consequence:
         v.consequence = consequence
+        changed = True
+    if exon and not v.exon:
+        v.exon = exon
         changed = True
     return changed
 

@@ -76,14 +76,34 @@ export interface ClinVarRecord {
   variation_id?: string;
 }
 
+export type Zygosity = "hom_ref" | "het" | "hom_alt" | "missing";
+
+export interface MemberCall {
+  member_id: string;
+  role: string;
+  zygosity: Zygosity;
+  depth?: number | null;
+  allele_balance?: number | null;
+  gq?: number | null;
+}
+
 export interface VariantRow {
   id: string;
+  chrom?: string;
+  pos?: number;
+  ref?: string;
+  alt?: string;
   gene?: string;
   hgvs_c?: string;
   hgvs_p?: string;
   transcript?: string;
   consequence?: string;
+  exon?: string;                  // "14/45" — VEP CSQ EXON field
+  genomic_hgvs?: string;          // "chr5:g.14363831C>T"
+  omim_id?: string;               // OMIM gene * number
   inheritance_models: InheritanceModel[];
+  inheritance_confidence?: "high" | "medium" | "low";
+  calls?: MemberCall[];
   af_global?: number | null;
   af_sas?: number | null;
   af_indi?: number | null;

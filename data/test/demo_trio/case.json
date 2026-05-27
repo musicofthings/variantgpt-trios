@@ -102,10 +102,14 @@
       "hgvs_c": "c.5266dupC",
       "hgvs_p": "p.Gln1756Profs*74",
       "consequence": "frameshift_variant",
+      "exon": null,
+      "genomic_hgvs": "chr17:g.43093015G>A",
+      "omim_id": null,
       "inheritance_models": [
         "unresolved"
       ],
       "inheritance_confidence": "low",
+      "calls": [],
       "populations": [
         {
           "source": "gnomad_v4_global",
@@ -345,10 +349,14 @@
       "hgvs_c": "c.6203C>T",
       "hgvs_p": "p.Pro2068Leu",
       "consequence": "missense_variant",
+      "exon": null,
+      "genomic_hgvs": "chr11:g.108326180C>T",
+      "omim_id": null,
       "inheritance_models": [
         "de_novo"
       ],
       "inheritance_confidence": "high",
+      "calls": [],
       "populations": [
         {
           "source": "gnomad_v4_global",
@@ -580,10 +588,14 @@
       "hgvs_c": "c.41329C>T",
       "hgvs_p": "p.Arg13777*",
       "consequence": "stop_gained",
+      "exon": null,
+      "genomic_hgvs": "chr2:g.178562809G>A",
+      "omim_id": null,
       "inheritance_models": [
         "de_novo"
       ],
       "inheritance_confidence": "high",
+      "calls": [],
       "populations": [
         {
           "source": "gnomad_v4_global",
@@ -823,10 +835,14 @@
       "hgvs_c": "c.20A>T",
       "hgvs_p": "p.Glu7Val",
       "consequence": "missense_variant",
+      "exon": null,
+      "genomic_hgvs": "chr11:g.5226774A>T",
+      "omim_id": null,
       "inheritance_models": [
         "ar_hom"
       ],
       "inheritance_confidence": "high",
+      "calls": [],
       "populations": [
         {
           "source": "gnomad_v4_global",
@@ -1074,10 +1090,14 @@
       "hgvs_c": "c.79G>A",
       "hgvs_p": "p.Glu27Lys",
       "consequence": "missense_variant",
+      "exon": null,
+      "genomic_hgvs": "chr11:g.5226778T>A",
+      "omim_id": null,
       "inheritance_models": [
         "ar_hom"
       ],
       "inheritance_confidence": "high",
+      "calls": [],
       "populations": [
         {
           "source": "gnomad_v4_global",
@@ -1325,10 +1345,14 @@
       "hgvs_c": "c.2080A>G",
       "hgvs_p": "p.Met694Val",
       "consequence": "missense_variant",
+      "exon": null,
+      "genomic_hgvs": "chr16:g.3293310G>A",
+      "omim_id": null,
       "inheritance_models": [
         "ar_hom"
       ],
       "inheritance_confidence": "high",
+      "calls": [],
       "populations": [
         {
           "source": "gnomad_v4_global",
@@ -1576,10 +1600,14 @@
       "hgvs_c": "c.563C>T",
       "hgvs_p": "p.Ser188Phe",
       "consequence": "missense_variant",
+      "exon": null,
+      "genomic_hgvs": "chrX:g.154535443C>T",
+      "omim_id": null,
       "inheritance_models": [
         "x_linked_recessive"
       ],
       "inheritance_confidence": "high",
+      "calls": [],
       "populations": [
         {
           "source": "gnomad_v4_global",
@@ -1827,11 +1855,15 @@
       "hgvs_c": "c.1521_1523delCTT",
       "hgvs_p": "p.Phe508del",
       "consequence": "inframe_deletion",
+      "exon": null,
+      "genomic_hgvs": "chr7:g.117559591_117559593del",
+      "omim_id": null,
       "inheritance_models": [
         "unresolved",
         "comp_het"
       ],
       "inheritance_confidence": "low",
+      "calls": [],
       "populations": [
         {
           "source": "gnomad_v4_global",
@@ -2071,11 +2103,15 @@
       "hgvs_c": "c.1624G>T",
       "hgvs_p": "p.Gly542*",
       "consequence": "stop_gained",
+      "exon": null,
+      "genomic_hgvs": "chr7:g.117548795G>T",
+      "omim_id": null,
       "inheritance_models": [
         "unresolved",
         "comp_het"
       ],
       "inheritance_confidence": "low",
+      "calls": [],
       "populations": [
         {
           "source": "gnomad_v4_global",
@@ -2315,10 +2351,14 @@
       "hgvs_c": "c.35delG",
       "hgvs_p": "p.Gly12Valfs*2",
       "consequence": "frameshift_variant",
+      "exon": null,
+      "genomic_hgvs": "chr13:g.20189547C>T",
+      "omim_id": null,
       "inheritance_models": [
         "unresolved"
       ],
       "inheritance_confidence": "low",
+      "calls": [],
       "populations": [
         {
           "source": "gnomad_v4_global",
@@ -2558,10 +2598,14 @@
       "hgvs_c": "c.5125C>T",
       "hgvs_p": "p.Arg1709Cys",
       "consequence": "missense_variant",
+      "exon": null,
+      "genomic_hgvs": "chr1:g.985266C>T",
+      "omim_id": null,
       "inheritance_models": [
         "unresolved"
       ],
       "inheritance_confidence": "low",
+      "calls": [],
       "populations": [
         {
           "source": "gnomad_v4_global",

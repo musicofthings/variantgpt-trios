@@ -38,6 +38,17 @@ interface EngineVariant {
   hgvs_c?: string | null;
   hgvs_p?: string | null;
   consequence?: string | null;
+  exon?: string | null;
+  genomic_hgvs?: string | null;
+  omim_id?: string | null;
+  calls?: {
+    member_id: string;
+    role: string;
+    zygosity: "hom_ref" | "het" | "hom_alt" | "missing";
+    depth?: number | null;
+    allele_balance?: number | null;
+    gq?: number | null;
+  }[] | null;
   inheritance_models: string[];
   inheritance_confidence: string;
   populations: { source: string; ac?: number; an?: number; af?: number | null; n_hom?: number; n_het?: number }[];
@@ -103,12 +114,28 @@ function adaptVariant(ev: EngineVariant, proposal?: EngineProposal): VariantRow 
 
   return {
     id: ev.id,
+    chrom: ev.chrom,
+    pos: ev.pos,
+    ref: ev.ref,
+    alt: ev.alt,
     gene: ev.gene ?? undefined,
     hgvs_c: ev.hgvs_c ?? undefined,
     hgvs_p: ev.hgvs_p ?? undefined,
     transcript: ev.transcript ?? undefined,
     consequence: ev.consequence ?? undefined,
+    exon: ev.exon ?? undefined,
+    genomic_hgvs: ev.genomic_hgvs ?? undefined,
+    omim_id: ev.omim_id ?? undefined,
     inheritance_models: ev.inheritance_models as InheritanceModel[],
+    inheritance_confidence: (ev.inheritance_confidence as "high" | "medium" | "low" | undefined) ?? undefined,
+    calls: ev.calls ? ev.calls.map((c) => ({
+      member_id: c.member_id,
+      role: c.role,
+      zygosity: c.zygosity,
+      depth: c.depth ?? null,
+      allele_balance: c.allele_balance ?? null,
+      gq: c.gq ?? null,
+    })) : undefined,
     af_global: af("gnomad_v4_global"),
     af_sas: af("gnomad_v4_sas"),
     af_indi: af("indigenomes"),
