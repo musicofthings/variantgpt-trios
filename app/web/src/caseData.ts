@@ -21,10 +21,32 @@ export interface EngineCase {
     relations: [string, string, string][];
   };
   hpo: { hpo_id: string; label?: string; source?: string }[];
+  clinical_history?: {
+    text?: string;
+    onset_age?: string;
+    consanguinity_note?: string;
+    prior_testing?: string;
+    family_history?: string;
+  } | null;
   qc: Record<string, unknown>;
   variants: EngineVariant[];
   proposals: EngineProposal[];
   versions: Record<string, string>;
+}
+
+/** HPO term as used by the report's patient-details section. */
+export interface HPOTermRow {
+  hpo_id: string;
+  label?: string;
+}
+
+/** Patient clinical context — plumbed to the report's first page. */
+export interface ClinicalHistory {
+  text?: string;
+  onset_age?: string;
+  consanguinity_note?: string;
+  prior_testing?: string;
+  family_history?: string;
 }
 
 interface EngineVariant {
@@ -202,6 +224,9 @@ export function adaptCase(engine: EngineCase): {
   caseRow: CaseRow;
   variants: VariantRow[];
   proposals: ReclassProposal[];
+  hpo: HPOTermRow[];
+  clinical_history: ClinicalHistory | null;
+  proband_member: { id: string; sex: string; affected: string; sample_name?: string } | null;
 } {
   const propByVar = new Map(engine.proposals.map((p) => [p.variant_id, p]));
   const variants = engine.variants.map((v) => adaptVariant(v, propByVar.get(v.id)));
@@ -221,6 +246,11 @@ export function adaptCase(engine: EngineCase): {
     proposals: variants
       .filter((v) => v.reclass)
       .map((v) => v.reclass as ReclassProposal),
+    hpo: (engine.hpo ?? []).map((h) => ({ hpo_id: h.hpo_id, label: h.label })),
+    clinical_history: engine.clinical_history ?? null,
+    proband_member: proband
+      ? { id: proband.id, sex: proband.sex, affected: proband.affected, sample_name: proband.sample_name }
+      : null,
   };
 }
 

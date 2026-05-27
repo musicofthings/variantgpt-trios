@@ -2,11 +2,11 @@ import { useMemo } from "react";
 import { useParams, useSearchParams, Link } from "react-router-dom";
 import { TierChip } from "../components/TierChip";
 import { ReclassBadge } from "../components/ReclassBadge";
-import { EvidenceLedger } from "../components/EvidenceLedger";
 import { PopulationFreqPanel } from "../components/PopulationFreqPanel";
 import { PredictorGauges } from "../components/PredictorGauges";
 import { useDemoCase } from "../caseData";
-import type { InheritanceModel, VariantRow } from "../types";
+import type { HPOTermRow } from "../caseData";
+import type { EvidenceRow, InheritanceModel, VariantRow } from "../types";
 
 /** Clinical report — print-ready, paginated layout.
  *  - Page 1: cover + case summary + selected-findings table
@@ -52,6 +52,14 @@ export function Report() {
   }
 
   const pedigree = data.caseRow;
+  const hpoTerms: HPOTermRow[] = data.hpo ?? [];
+  const hpoLabelById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const h of hpoTerms) m.set(h.hpo_id, h.label ?? h.hpo_id);
+    return m;
+  }, [hpoTerms]);
+  const ch = data.clinical_history;
+  const probandMember = data.proband_member;
   const today = new Date().toISOString().slice(0, 10);
 
   function exportTSV() {
@@ -138,6 +146,57 @@ export function Report() {
               ["Variants in this report", `${reportVariants.length}`],
             ]} />
           </Section>
+
+          {/* Patient details — pedigree + clinical history block. Mirrors
+              the demographics/clinical-context section on a lab report's
+              first page (Apollo et al.). All fields fall back to "—" when
+              the engine didn't capture them so the layout is stable. */}
+          <Section title="Patient details">
+            <DL items={[
+              ["Proband ID", probandMember?.id ?? pedigree.proband ?? "—"],
+              ["Sample name", probandMember?.sample_name ?? "—"],
+              ["Sex", probandMember?.sex ?? "—"],
+              ["Affected status", probandMember?.affected ?? "—"],
+              ["Onset age", ch?.onset_age ?? "—"],
+              ["Consanguinity", ch?.consanguinity_note ?? "—"],
+              ["Family history", ch?.family_history ?? "—"],
+              ["Prior testing", ch?.prior_testing ?? "—"],
+            ]} />
+          </Section>
+
+          <Section title="Clinical history">
+            {ch?.text ? (
+              <p style={{ fontSize: 12, whiteSpace: "pre-wrap" }}>{ch.text}</p>
+            ) : (
+              <p style={{ fontSize: 12, color: "var(--ink-soft)" }}>
+                No free-text clinical summary captured at intake.
+              </p>
+            )}
+          </Section>
+
+          {/* HPO phenotype catalog — every HPO term entered for the case,
+              with its human-readable label. A few words per term so the
+              clinician can audit what we're matching against. */}
+          {hpoTerms.length > 0 ? (
+            <Section title="Phenotype (HPO terms)">
+              <table className="table keep-together" style={{ fontSize: 12, marginTop: 4 }}>
+                <thead>
+                  <tr>
+                    <th style={{ width: 110 }}>HPO ID</th>
+                    <th>Label</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {hpoTerms.map((h) => (
+                    <tr key={h.hpo_id}>
+                      <td className="mono">{h.hpo_id}</td>
+                      <td>{h.label ?? <em style={{ color: "var(--ink-soft)" }}>(no label resolved)</em>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </Section>
+          ) : null}
 
           <Section title="Selected findings">
             {reportVariants.length === 0 ? (
@@ -235,7 +294,14 @@ export function Report() {
 
         {/* ── PAGES 2…N — One per variant ─────────────────────────────── */}
         {reportVariants.map((v, i) => (
-          <VariantDetailPage key={v.id} v={v} index={i + 1} total={reportVariants.length} caseId={caseId!} />
+          <VariantDetailPage
+            key={v.id}
+            v={v}
+            index={i + 1}
+            total={reportVariants.length}
+            caseId={caseId!}
+            hpoLabelById={hpoLabelById}
+          />
         ))}
 
         <footer
@@ -259,11 +325,12 @@ export function Report() {
 /** Per-variant detail page — same fields as the workbench's Clinical Card,
  *  plus phenotype relevance + evidence ledger + population AF + predictors.
  *  Wrapped in a .report-page so @media print forces it to a fresh sheet. */
-function VariantDetailPage({ v, index, total, caseId }: {
+function VariantDetailPage({ v, index, total, caseId, hpoLabelById }: {
   v: VariantRow;
   index: number;
   total: number;
   caseId: string;
+  hpoLabelById: Map<string, string>;
 }) {
   const STRENGTH_TOKEN: Record<string, string> = {
     VeryStrong: "_VS", Strong: "_S", Moderate: "_M", Supporting: "_Sup", StandAlone: "_BA",
@@ -359,23 +426,39 @@ function VariantDetailPage({ v, index, total, caseId }: {
         </table>
       </Section>
 
-      {/* Phenotype relevance prose — driven by hpo_matches. Only render when
-          the variant has at least one HPO overlap with the case's HPO list. */}
-      {v.hpo_matches && v.hpo_matches.length > 0 ? (
-        <Section title="Phenotype relevance">
-          <p style={{ fontSize: 12 }}>
-            <strong>{v.gene}</strong> is associated with{" "}
-            <strong>{v.hpo_matches.length}</strong>{" "}
-            of the case's recorded HPO phenotypes (
-            <span className="mono" style={{ fontSize: 11 }}>{v.hpo_matches.join(", ")}</span>
-            ) per the HPO consortium <em>genes_to_phenotype</em> catalog. Phenotype overlap
-            does not by itself establish causation but is a strong prioritization signal
-            in trio interpretation: variants in genes whose disease spectrum matches the
-            proband's clinical phenotype are more likely to be the molecular diagnosis than
-            phenotype-discordant findings of comparable ACMG strength.
-          </p>
-        </Section>
-      ) : null}
+      {/* Gene-level prose — one paragraph describing what we know about the
+          gene, plus the disease conditions ClinVar associates with it. */}
+      <Section title="Gene">
+        <p style={{ fontSize: 12 }}>
+          {geneParagraph(v)}
+        </p>
+      </Section>
+
+      {/* Variant-level prose with phenotype relevance — one paragraph
+          describing the variant's molecular consequence, its ACMG
+          classification, and (when hpo_matches is non-empty) which of the
+          case's HPO phenotypes the gene matches, with a short label per
+          matched term. */}
+      <Section title="Variant findings & phenotype relevance">
+        <p style={{ fontSize: 12 }}>
+          {variantParagraph(v)}
+        </p>
+        {v.hpo_matches && v.hpo_matches.length > 0 ? (
+          <ul style={{ fontSize: 11, margin: "8px 0 0 16px", padding: 0 }}>
+            {v.hpo_matches.map((hp) => (
+              <li key={hp} style={{ marginBottom: 2 }}>
+                <span className="mono">{hp}</span>
+                {" — "}
+                <span>{hpoLabelById.get(hp) ?? "(no label resolved)"}</span>
+                {" — "}
+                <span style={{ color: "var(--ink-soft)" }}>
+                  documented gene–phenotype association in the HPO catalog for {v.gene}.
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </Section>
 
       {/* Family genotype calls — zygosity / depth / AB / GQ per member. */}
       {v.calls && v.calls.length > 0 ? (
@@ -405,13 +488,10 @@ function VariantDetailPage({ v, index, total, caseId }: {
         </Section>
       ) : null}
 
-      {v.evidence && v.evidence.length > 0 ? (
-        <Section title="ACMG evidence ledger">
-          <div className="keep-together">
-            <EvidenceLedger rows={v.evidence} />
-          </div>
-        </Section>
-      ) : null}
+      {/* Fired-only ACMG evidence — non-fired criteria are skipped to keep
+          the report concise. Each fired row shows the trigger and source so
+          the reasoning behind each strength assignment is auditable. */}
+      <FiredEvidence rows={(v.evidence ?? []).filter((e) => e.fired)} />
 
       {v.populations && v.populations.length > 0 ? (
         <Section title="Population allele frequencies">
@@ -446,6 +526,121 @@ function VariantDetailPage({ v, index, total, caseId }: {
       ) : null}
     </section>
   );
+}
+
+/** Compact fired-only ACMG evidence table for the report. Skips non-fired
+ *  criteria entirely so the report is not bloated with rows that say "not
+ *  fired" — those are inspectable in the workbench drawer. */
+function FiredEvidence({ rows }: { rows: EvidenceRow[] }) {
+  if (!rows.length) {
+    return (
+      <Section title="ACMG evidence (fired)">
+        <p style={{ fontSize: 12, color: "var(--ink-soft)" }}>
+          No ACMG criteria fired for this variant.
+        </p>
+      </Section>
+    );
+  }
+  return (
+    <Section title="ACMG evidence (fired)">
+      <table className="table keep-together" style={{ fontSize: 12 }}>
+        <thead>
+          <tr>
+            <th style={{ width: 90 }}>Criterion</th>
+            <th style={{ width: 90 }}>Strength</th>
+            <th>Summary</th>
+            <th>Trigger / source</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.criterion}>
+              <td className="mono">{r.criterion}</td>
+              <td>{r.strength ?? "—"}</td>
+              <td>{r.summary ?? "Fired"}</td>
+              <td style={{ fontSize: 11 }}>
+                {r.trigger ? <div className="mono">{r.trigger}</div> : null}
+                {r.source ? <div style={{ color: "var(--ink-soft)" }}>{r.source}</div> : null}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </Section>
+  );
+}
+
+/** Build a gene-level prose paragraph. We don't have a curated gene summary
+ *  source wired yet, so the paragraph is composed from the structured data
+ *  we DO have: gene symbol, OMIM accession, ClinVar conditions tied to the
+ *  gene (when available), and a note about HPO-catalog coverage. Falls back
+ *  gracefully when fields are absent. */
+function geneParagraph(v: VariantRow): React.ReactNode {
+  const parts: React.ReactNode[] = [];
+  parts.push(<><strong>{v.gene ?? "This gene"}</strong></>);
+  if (v.omim_id) {
+    parts.push(<> (OMIM <span className="mono">*{v.omim_id}</span>)</>);
+  }
+  parts.push(<> is reported in the MANE Select transcript <span className="mono">{v.transcript ?? "—"}</span>.</>);
+
+  const conditions = v.clinvar?.conditions?.filter(Boolean) ?? [];
+  if (conditions.length > 0) {
+    parts.push(<> ClinVar links this gene to {conditions.slice(0, 4).join("; ")}{conditions.length > 4 ? ", among others" : ""}.</>);
+  }
+
+  if (v.hpo_matches && v.hpo_matches.length > 0) {
+    parts.push(<> The HPO consortium <em>genes_to_phenotype</em> catalog records gene–phenotype associations for {v.gene} that overlap with {v.hpo_matches.length} of the case's recorded clinical phenotypes (detailed below).</>);
+  } else {
+    parts.push(<> No overlap was found between this gene's HPO associations and the case's recorded phenotype terms; this does not exclude pathogenicity but reduces phenotype-driven prior probability.</>);
+  }
+  return <>{parts}</>;
+}
+
+/** Build a variant-level prose paragraph. Covers: molecular consequence,
+ *  zygosity in the proband, inheritance model with confidence, ACMG tier,
+ *  reclassification narrative (if any), and a phenotype-relevance closing
+ *  sentence referencing the HPO overlap. */
+function variantParagraph(v: VariantRow): React.ReactNode {
+  const parts: React.ReactNode[] = [];
+  const probandCall = v.calls?.find((c) => c.role === "proband");
+  const zyg = probandCall ? humanizeZyg(probandCall.zygosity).toLowerCase() : null;
+
+  parts.push(<>The variant </>);
+  parts.push(<span className="mono">{v.hgvs_c}</span>);
+  if (v.hgvs_p) parts.push(<> (<span className="mono">{v.hgvs_p}</span>)</>);
+  parts.push(<> is a <strong>{v.consequence ?? "sequence variant"}</strong></>);
+  if (v.exon) parts.push(<> in exon {v.exon}</>);
+  if (zyg) parts.push(<>, identified in the proband as <strong>{zyg}</strong></>);
+  parts.push(<>. </>);
+
+  if (v.inheritance_models.length) {
+    const conf = v.inheritance_confidence ? ` with ${v.inheritance_confidence} confidence` : "";
+    parts.push(<>Segregation analysis is consistent with <strong>{v.inheritance_models.map(humanizeModel).join(" / ")}</strong>{conf}. </>);
+  }
+
+  const fired = (v.evidence ?? []).filter((e) => e.fired);
+  if (fired.length) {
+    parts.push(<>ACMG/AMP classification — <TierChip tier={v.baseline_tier} /> — is driven by <span className="mono">{fired.map((e) => e.criterion).join(", ")}</span>. </>);
+  } else {
+    parts.push(<>ACMG/AMP classification: <TierChip tier={v.baseline_tier} />. </>);
+  }
+
+  if (v.reclass) {
+    parts.push(<>South-Asian allele-frequency review reclassified this variant from <strong>{v.reclass.from}</strong> to <strong>{v.reclass.to}</strong> (Δ {v.reclass.delta}), driven by {v.reclass.criteria.join(", ")}. </>);
+  }
+
+  if (v.clinvar?.clinical_significance) {
+    parts.push(<>ClinVar records this variant as <strong>{v.clinvar.clinical_significance}</strong>
+      {v.clinvar.review_stars != null ? <> ({v.clinvar.review_stars}★ review status)</> : null}. </>);
+  }
+
+  if (v.hpo_matches && v.hpo_matches.length > 0) {
+    parts.push(<>The proband's phenotype includes {v.hpo_matches.length} HPO term{v.hpo_matches.length === 1 ? "" : "s"} associated with {v.gene}, supporting clinical relevance.</>);
+  } else {
+    parts.push(<>No direct HPO overlap was identified between {v.gene} and the case's recorded phenotype.</>);
+  }
+
+  return <>{parts}</>;
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
