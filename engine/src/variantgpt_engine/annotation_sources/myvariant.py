@@ -36,10 +36,9 @@ log = logging.getLogger(__name__)
 
 MYVARIANT_URL = "https://myvariant.info/v1/variant"
 BATCH_SIZE = 200            # smaller batches → finer progress + faster recovery on a slow batch
-# 5-way concurrency keeps peak memory bounded. 10-way was peaking too high
-# when the per-batch ClinVar payload includes many rcv submitter records.
-# myvariant.info handles either fine — this is a client-side memory choice.
-MAX_CONCURRENT = 5
+# With shared-cpu-4x + 8 GB we can push to 10-way concurrent without memory
+# pressure. myvariant.info handles this volume fine.
+MAX_CONCURRENT = 10
 PER_BATCH_TIMEOUT = 30.0    # seconds; one slow batch shouldn't stall the whole job
 FIELDS = ",".join([
     # ClinVar

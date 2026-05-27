@@ -39,15 +39,22 @@ primary_region = "iad"          # change to closer region (e.g. "bom" for Mumbai
     soft_limit = 3
 
 [[vm]]
-  # shared-cpu-2x with 4 GB. 2 GB on shared-cpu-1x was still OOM-killing
-  # silently after VEP REST completed (the gather of all 43 batch results
-  # + the variants list + pydantic overhead briefly peaks above 2 GB).
-  # shared-cpu-2x caps at 4 GB; that's our ceiling here. For inputs beyond
-  # ~15k surviving variants we'd need to upgrade to shared-cpu-4x (8 GB)
-  # or move to a different host. Cost ~$8/mo.
+  # shared-cpu-4x with 8 GB. Sized for clinical-grade trio workloads:
+  #   - 4 vCPUs let asyncio.gather + httpx schedule more concurrent
+  #     network requests without core contention (the AF lookup,
+  #     VEP REST, ClinVar overlay, and IndiGen passes all benefit).
+  #   - 8 GB removes the headroom worry entirely. We've optimized peak
+  #     to ~2-3 GB via chunking + gc; this gives 2-3× safety margin
+  #     so a single large case (e.g. WGS with low pre-filter) can't
+  #     OOM.
+  #   - Cost ~$57/mo always-on (min_machines_running=1). Worth the
+  #     bump vs $26/mo on shared-cpu-2x because annotate+classify
+  #     drops ~30-40% wall-clock with twice the CPU available.
+  # Cap is shared-cpu-8x / 16 GB if we ever need more; beyond that
+  # the workload is network-bound and a bigger VM won't help.
   cpu_kind = "shared"
-  cpus = 2
-  memory_mb = 4096
+  cpus = 4
+  memory_mb = 8192
 
 # Auth: the Worker passes a shared bearer in Authorization: Bearer <token>.
 # Set as a Fly secret (not in [env]):
