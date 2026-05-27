@@ -227,6 +227,10 @@ async function _continueRun(
   // is skipped. On stage completion the engine PUTs the result to .put.
   // This makes reruns after a downstream failure cheap (the slow stages —
   // AF lookup and VEP REST — don't re-execute).
+  // Versioned cache keys. Bump the version suffix when the Variant or
+  // Joint schema changes in a way that makes older cached payloads
+  // miss fields (e.g. adding calls/exon/genomic_hgvs in commit db1793a
+  // bumped variants → v2).
   async function signCacheStage(stage: string) {
     const key = `cases/${id}/cache/${stage}.json.gz`;
     return {
@@ -237,7 +241,7 @@ async function _continueRun(
   const cacheUrls = {
     af_map: await signCacheStage("af_map"),
     csq: await signCacheStage("csq"),
-    variants: await signCacheStage("variants"),
+    variants: await signCacheStage("variants_v2"),
   };
 
   // (No reference tracks signed currently. IndiGenomes lookup pivoted to
