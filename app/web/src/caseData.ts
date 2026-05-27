@@ -41,6 +41,7 @@ interface EngineVariant {
   exon?: string | null;
   genomic_hgvs?: string | null;
   omim_id?: string | null;
+  hpo_matches?: string[] | null;
   calls?: {
     member_id: string;
     role: string;
@@ -126,6 +127,7 @@ function adaptVariant(ev: EngineVariant, proposal?: EngineProposal): VariantRow 
     exon: ev.exon ?? undefined,
     genomic_hgvs: ev.genomic_hgvs ?? undefined,
     omim_id: ev.omim_id ?? undefined,
+    hpo_matches: ev.hpo_matches ?? undefined,
     inheritance_models: ev.inheritance_models as InheritanceModel[],
     inheritance_confidence: (ev.inheritance_confidence as "high" | "medium" | "low" | undefined) ?? undefined,
     calls: ev.calls ? ev.calls.map((c) => ({

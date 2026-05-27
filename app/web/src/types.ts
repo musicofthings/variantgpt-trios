@@ -101,6 +101,7 @@ export interface VariantRow {
   exon?: string;                  // "14/45" — VEP CSQ EXON field
   genomic_hgvs?: string;          // "chr5:g.14363831C>T"
   omim_id?: string;               // OMIM gene * number
+  hpo_matches?: string[];         // case HPO ids whose gene-association includes this variant's gene
   inheritance_models: InheritanceModel[];
   inheritance_confidence?: "high" | "medium" | "low";
   calls?: MemberCall[];

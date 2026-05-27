@@ -159,6 +159,7 @@ class Variant(BaseModel):
     exon: Optional[str] = None                         # e.g. "14/45" — VEP CSQ EXON field
     genomic_hgvs: Optional[str] = None                 # e.g. "chr5:g.14363831C>T"
     omim_id: Optional[str] = None                      # OMIM gene id (the * number)
+    hpo_matches: list[str] = Field(default_factory=list)  # case HPO ids whose gene-association includes this variant's gene
     inheritance_models: list[InheritanceModel] = Field(default_factory=list)
     inheritance_confidence: Literal["high", "medium", "low"] = "medium"
     calls: list[MemberCall] = Field(default_factory=list)

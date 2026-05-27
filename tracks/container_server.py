@@ -54,7 +54,7 @@ sys.path.insert(0, str(THIS.parents[1] / "engine" / "src"))
 from variantgpt_engine.pedigree import load_ped  # noqa: E402
 from variantgpt_engine.acmg import classify  # noqa: E402
 from variantgpt_engine.annotation import AnnotationContext, annotate  # noqa: E402
-from variantgpt_engine.annotation_sources import indigenomes, mygene, myvariant, vep_rest  # noqa: E402
+from variantgpt_engine.annotation_sources import hpo_genes, indigenomes, mygene, myvariant, vep_rest  # noqa: E402
 from variantgpt_engine.annotation_sources.csq import pick_canonical  # noqa: E402
 from variantgpt_engine import cache  # noqa: E402
 from variantgpt_engine.build_detect import detect_build  # noqa: E402
@@ -620,6 +620,28 @@ async def _execute_job(job: dict[str, Any]) -> None:
                             emit(f"  IndiGen debug: {line}")
                 except Exception as e:  # noqa: BLE001
                     emit(f"IndiGen: lookup failed (continuing without): {type(e).__name__}: {e}")
+                await post_status("running")
+
+            # HPO phenotype matching — for each variant, see if its gene is
+            # associated with any of the case's HPO terms in the HPO consortium
+            # gene-phenotype catalog. Boosts priority_score for matching
+            # variants so they sort to the top in the workbench's default view.
+            if real_mode and variants and hpo_ids:
+                emit(f"HPO: ensuring genes_to_phenotype catalog is loaded ({len(hpo_ids)} case HPO terms)")
+                hpo_ok = await hpo_genes.ensure_loaded()
+                if hpo_ok:
+                    hpo_hits = 0
+                    for v in variants:
+                        m = hpo_genes.match_gene(v.gene, hpo_ids)
+                        if m:
+                            v.hpo_matches = m
+                            # Boost priority — each match adds 0.1, capped at +0.5 so
+                            # ACMG tier + reclass still dominate the overall score.
+                            v.priority_score = (v.priority_score or 0) + min(0.5, 0.1 * len(m))
+                            hpo_hits += 1
+                    emit(f"HPO: {hpo_hits} variants matched at least one case phenotype")
+                else:
+                    emit("HPO: catalog unavailable — skipping phenotype matching")
                 await post_status("running")
 
             # OMIM gene IDs via mygene.info — batched gene-symbol lookup. Quick

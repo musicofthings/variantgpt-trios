@@ -248,7 +248,10 @@ async function _continueRun(
     //              annotate() (it was the real bottleneck — 60s/chunk —
     //              and the data is redundant with the myvariant.info
     //              ClinVar/dbNSFP batched fetch that runs right after).
-    variants: await signCacheStage("variants_v4"),
+    // variants_v5: added hpo_matches field (gene↔HPO phenotype matching against
+    //              case HPO terms). Bump invalidates v4 caches so the new
+    //              schema gets populated on the next run.
+    variants: await signCacheStage("variants_v5"),
   };
 
   // (No reference tracks signed currently. IndiGenomes lookup pivoted to

@@ -111,6 +111,10 @@ export function Workbench() {
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("priority");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
+  // Phenotype focus — when on, hide variants whose gene has no HPO overlap
+  // with the case's HPO terms. The pipeline populates v.hpo_matches per
+  // variant in container_server.py via hpo_genes.match_gene().
+  const [hpoOnly, setHpoOnly] = useState(false);
 
   const { caseId } = useParams<{ caseId: string }>();
   const { data, loading, error } = useDemoCase(caseId);
@@ -195,15 +199,23 @@ export function Workbench() {
     return counts;
   }, [variants, tabSpec]);
 
+  // Count variants with at least one HPO match — drives the "Phenotype match
+  // only" chip's count and disabled state.
+  const hpoMatchCount = useMemo(
+    () => variants.filter((v) => (v.hpo_matches?.length ?? 0) > 0).length,
+    [variants],
+  );
+
   const filtered = useMemo(
     () => variants.filter((v) => {
       if (!tabSpec.match(v)) return false;
       if (tierFilter.size > 0 && !tierFilter.has(v.baseline_tier)) return false;
       if (geneFilter && !(v.gene ?? "").toLowerCase().includes(geneFilter.toLowerCase())) return false;
       if ((v.af_global ?? 0) > afMax && (v.af_sas ?? 0) > afMax) return false;
+      if (hpoOnly && (v.hpo_matches?.length ?? 0) === 0) return false;
       return true;
     }),
-    [tabSpec, tierFilter, geneFilter, afMax, variants],
+    [tabSpec, tierFilter, geneFilter, afMax, hpoOnly, variants],
   );
 
   // Sort the filtered set. Returns a new array; doesn't mutate `filtered`.
@@ -394,6 +406,39 @@ export function Workbench() {
                 </button>
               ) : null}
             </div>
+          </div>
+
+          {/* Phenotype focus — filter to variants whose gene has at least one
+              HPO term in common with the case's HPO list. Disabled if no
+              variants in the case have HPO matches (e.g. case had no HPO
+              terms, or HPO catalog failed to download on the engine). */}
+          <div>
+            <div style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 6 }}>
+              Phenotype
+            </div>
+            <button
+              onClick={() => setHpoOnly((x) => !x)}
+              disabled={hpoMatchCount === 0}
+              title={hpoMatchCount === 0
+                ? "No variants in this case have HPO gene matches. Add HPO terms in Intake and re-run, or ensure the engine could reach the HPO catalog."
+                : "Show only variants whose gene is associated with at least one case HPO term"}
+              style={{
+                padding: "4px 12px",
+                borderRadius: 999,
+                border: "1px solid var(--rule)",
+                background: hpoOnly ? "var(--primary-soft)" : "var(--paper)",
+                opacity: hpoMatchCount === 0 ? 0.4 : 1,
+                cursor: hpoMatchCount === 0 ? "default" : "pointer",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
+              <span>Phenotype match only</span>
+              <span className="mono" style={{ fontSize: 11, color: "var(--ink-soft)" }}>
+                {hpoMatchCount}
+              </span>
+            </button>
           </div>
 
           <div style={{ display: "grid", gap: 12, gridTemplateColumns: "1fr 1fr" }}>
@@ -695,6 +740,32 @@ function ClinicalCard({ v }: { v: VariantRow }) {
           <DRow label="OMIM gene" value={
             omimUrl ? <a href={omimUrl} target="_blank" rel="noreferrer">{v.omim_id}</a> : null
           } tipForLabel="OMIM gene * number from mygene.info. Click to open omim.org for the gene-phenotype description." />
+          <DRow label="HPO matches" value={
+            v.hpo_matches && v.hpo_matches.length > 0 ? (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                {v.hpo_matches.map((hp) => (
+                  <a
+                    key={hp}
+                    href={`https://hpo.jax.org/browse/term/${hp}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="mono"
+                    style={{
+                      fontSize: 11,
+                      padding: "1px 6px",
+                      borderRadius: 999,
+                      border: "1px solid var(--rule)",
+                      background: "var(--primary-soft)",
+                      textDecoration: "none",
+                    }}
+                    title="Open this HPO term on hpo.jax.org"
+                  >
+                    {hp}
+                  </a>
+                ))}
+              </div>
+            ) : null
+          } tipForLabel="Case HPO terms whose gene-association catalog (HPO consortium genes_to_phenotype) includes this variant's gene. A match means the patient's phenotype is consistent with known disease associations for this gene." />
 
           {v.clinvar ? (
             <DRow label="ClinVar" value={
