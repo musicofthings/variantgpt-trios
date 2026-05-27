@@ -109,7 +109,12 @@ async def annotate_batch_async(
                     vep = by_input.get(_vep_region(jv))
                     if not vep:
                         continue
-                    jv.csq = _project(vep)
+                    try:
+                        jv.csq = _project(vep)
+                    except Exception as e:  # noqa: BLE001
+                        log.debug("VEP REST _project failed at %s: %s",
+                                  _vep_region(jv), e)
+                        continue
                     if jv.csq:
                         local_filled += 1
             async with lock:
@@ -169,9 +174,11 @@ def _project(vep_entry: dict) -> list[dict[str, str]]:
             # Protein context.
             "Amino_acids": tc.get("amino_acids", "") or "",
             "Codons": tc.get("codons", "") or "",
-            # Domain hits if any.
+            # Domain hits if any. VEP REST returns domains as a list of
+            # {db, name} dicts where 'name' is sometimes an int (e.g. Pfam
+            # accession IDs), so coerce to str before joining.
             "DOMAINS": ",".join(
-                (d.get("name") or "") for d in (tc.get("domains") or []) if isinstance(d, dict)
+                str(d.get("name") or "") for d in (tc.get("domains") or []) if isinstance(d, dict)
             ),
         })
     return out
