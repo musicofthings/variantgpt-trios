@@ -2,11 +2,7 @@
   "rules": [
     {
       "allowed": {
-        "origins": [
-          "https://variantgpt-web.pages.dev",
-          "https://*.variantgpt-web.pages.dev",
-          "http://localhost:5173"
-        ],
+        "origins": ["*"],
         "methods": ["GET", "PUT", "HEAD"],
         "headers": ["*"]
       },
