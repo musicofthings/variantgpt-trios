@@ -46,6 +46,27 @@ export interface Predictors {
   revel?: number;
   cadd?: number;
   spliceai?: number;
+  phylop?: number;
+  gerp?: number;
+  sift_score?: number;        // LOW = damaging (<0.05 = deleterious)
+  polyphen2_hvar?: number;    // HIGH = damaging (>0.957 probably damaging)
+  polyphen2_hdiv?: number;    // HIGH = damaging
+  mutation_taster?: number;   // HIGH = damaging
+  lrt?: number;               // HIGH = damaging
+  fathmm?: number;            // LOW = damaging (<-1.5)
+  provean?: number;           // LOW = damaging (<-2.5)
+  metasvm?: number;           // ensemble; HIGH = damaging
+  metalr?: number;            // ensemble; HIGH = damaging
+  vest4?: number;             // HIGH = damaging
+}
+
+/** Gene-level descriptive metadata, keyed by symbol at the case level. */
+export interface GeneInfo {
+  symbol: string;
+  name?: string;
+  summary?: string;
+  type_of_gene?: string;
+  omim_id?: string;
 }
 
 export interface CaseRow {

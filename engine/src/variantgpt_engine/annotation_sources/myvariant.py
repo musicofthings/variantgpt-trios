@@ -70,7 +70,11 @@ FIELDS = ",".join([
     "gnomad_genome.an.an",
     "gnomad_genome.an.an_sas",
     "gnomad_genome.hom",
-    # dbNSFP predictors
+    # dbNSFP predictors — kept as a fairly broad set so the report has
+    # multiple independent signals to triangulate on. dbNSFP exposes both
+    # the raw score (native convention, low- or high-is-damaging varies)
+    # and a converted_rankscore [0..1] high=damaging; we prefer the raw
+    # score so the frontend can label each row with its native threshold.
     "dbnsfp.revel.score",
     "dbnsfp.cadd.phred",
     "dbnsfp.alphamissense.score",
@@ -84,6 +88,21 @@ FIELDS = ",".join([
     "dbnsfp.spliceai.ds_dl",
     "dbnsfp.phylop.100way_vertebrate.rankscore",
     "dbnsfp.gerp",
+    # Classic per-amino-acid predictors. SIFT (low=damaging) and PolyPhen2
+    # (high=damaging) are the legacy pair; MutationTaster/LRT/FATHMM/PROVEAN
+    # round out the conservation + structural-impact panel; MetaSVM /
+    # MetaLR are ensemble meta-predictors that aggregate several of the
+    # above into a single score.
+    "dbnsfp.sift.score",
+    "dbnsfp.polyphen2.hvar.score",
+    "dbnsfp.polyphen2.hdiv.score",
+    "dbnsfp.mutationtaster.score",
+    "dbnsfp.lrt.score",
+    "dbnsfp.fathmm.score",
+    "dbnsfp.provean.score",
+    "dbnsfp.metasvm.score",
+    "dbnsfp.metalr.score",
+    "dbnsfp.vest4.score",
 ])
 
 
@@ -317,16 +336,7 @@ async def annotate_variants_async(
                         log.debug("dbnsfp projection failed for %s: %s", vid, e)
                         preds = None
                     if preds:
-                        cur = v.predictors
-                        merged = PredictorScores(
-                            alphamissense=cur.alphamissense if cur.alphamissense is not None else preds.alphamissense,
-                            revel=cur.revel if cur.revel is not None else preds.revel,
-                            cadd=cur.cadd if cur.cadd is not None else preds.cadd,
-                            spliceai=cur.spliceai if cur.spliceai is not None else preds.spliceai,
-                            phylop=cur.phylop if cur.phylop is not None else preds.phylop,
-                            gerp=cur.gerp if cur.gerp is not None else preds.gerp,
-                        )
-                        v.predictors = merged
+                        v.predictors = _merge_predictors(v.predictors, preds)
                         local += 1
             async with lock:
                 done += 1
@@ -408,16 +418,7 @@ def annotate_variants(
                 if preds:
                     # Merge — don't overwrite existing predictor scores from
                     # CSQ/demo overlay; fill in only where missing.
-                    cur = v.predictors
-                    merged = PredictorScores(
-                        alphamissense=cur.alphamissense if cur.alphamissense is not None else preds.alphamissense,
-                        revel=cur.revel if cur.revel is not None else preds.revel,
-                        cadd=cur.cadd if cur.cadd is not None else preds.cadd,
-                        spliceai=cur.spliceai if cur.spliceai is not None else preds.spliceai,
-                        phylop=cur.phylop if cur.phylop is not None else preds.phylop,
-                        gerp=cur.gerp if cur.gerp is not None else preds.gerp,
-                    )
-                    v.predictors = merged
+                    v.predictors = _merge_predictors(v.predictors, preds)
                     annotated += 1
     return annotated
 
@@ -571,6 +572,23 @@ def _project_dbnsfp(raw) -> Optional[PredictorScores]:
     phylop = _nested(raw, "phylop", "100way_vertebrate", "rankscore")
     gerp_raw = raw.get("gerp")
     gerp = gerp_raw.get("nr") if isinstance(gerp_raw, dict) else None
+
+    # Classic per-residue predictors. dbNSFP returns these per-transcript;
+    # _to_float() takes the max across the list. SIFT is the exception —
+    # SIFT convention is LOW = damaging, so taking max is intentionally
+    # the *most benign* score across transcripts. Frontend renders the raw
+    # number with the directionality cue.
+    sift = _nested(raw, "sift", "score")
+    polyphen2_hvar = _nested(raw, "polyphen2", "hvar", "score")
+    polyphen2_hdiv = _nested(raw, "polyphen2", "hdiv", "score")
+    mutation_taster = _nested(raw, "mutationtaster", "score")
+    lrt = _nested(raw, "lrt", "score")
+    fathmm = _nested(raw, "fathmm", "score")
+    provean = _nested(raw, "provean", "score")
+    metasvm = _nested(raw, "metasvm", "score")
+    metalr = _nested(raw, "metalr", "score")
+    vest4 = _nested(raw, "vest4", "score")
+
     return PredictorScores(
         alphamissense=_to_float(alphamissense),
         revel=_to_float(revel),
@@ -578,7 +596,44 @@ def _project_dbnsfp(raw) -> Optional[PredictorScores]:
         spliceai=_to_float(spliceai),
         phylop=_to_float(phylop),
         gerp=_to_float(gerp),
+        sift_score=_to_float_min(sift),       # SIFT: take min (most damaging) across transcripts
+        polyphen2_hvar=_to_float(polyphen2_hvar),
+        polyphen2_hdiv=_to_float(polyphen2_hdiv),
+        mutation_taster=_to_float(mutation_taster),
+        lrt=_to_float(lrt),
+        fathmm=_to_float_min(fathmm),         # FATHMM: low = damaging, take min
+        provean=_to_float_min(provean),       # PROVEAN: low = damaging, take min
+        metasvm=_to_float(metasvm),
+        metalr=_to_float(metalr),
+        vest4=_to_float(vest4),
     )
+
+
+def _merge_predictors(cur: PredictorScores, new: PredictorScores) -> PredictorScores:
+    """Fill in missing fields on `cur` from `new`. Existing non-None values
+    on `cur` are preserved (don't overwrite scores already set by VEP/CSQ
+    or a curated demo overlay). Returns a new PredictorScores."""
+    return PredictorScores(
+        **{
+            k: (getattr(cur, k) if getattr(cur, k) is not None else getattr(new, k))
+            for k in PredictorScores.model_fields.keys()
+        }
+    )
+
+
+def _to_float_min(v) -> Optional[float]:
+    """Variant of _to_float that returns the MIN across a transcript list.
+    Used for SIFT / FATHMM / PROVEAN where low = damaging — we want the
+    most damaging score, not the most benign, when picking one to report."""
+    if v is None:
+        return None
+    if isinstance(v, list):
+        flat = [x for x in v if isinstance(x, (int, float))]
+        return min(flat) if flat else None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
 
 
 def _nested(d, *keys):

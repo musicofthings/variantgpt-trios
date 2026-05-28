@@ -20,7 +20,14 @@ export interface EngineCase {
     consanguinity: boolean;
     relations: [string, string, string][];
   };
-  hpo: { hpo_id: string; label?: string; source?: string }[];
+  hpo: { hpo_id: string; label?: string; definition?: string; source?: string }[];
+  gene_info?: Record<string, {
+    symbol: string;
+    name?: string;
+    summary?: string;
+    type_of_gene?: string;
+    omim_id?: string;
+  }>;
   clinical_history?: {
     text?: string;
     onset_age?: string;
@@ -38,6 +45,18 @@ export interface EngineCase {
 export interface HPOTermRow {
   hpo_id: string;
   label?: string;
+  definition?: string;
+}
+
+/** Per-gene metadata from mygene.info — keyed by HGNC symbol at the case
+ *  level so the report can render gene-function prose without bloating
+ *  each variant row. */
+export interface GeneInfoRow {
+  symbol: string;
+  name?: string;
+  summary?: string;
+  type_of_gene?: string;
+  omim_id?: string;
 }
 
 /** Patient clinical context — plumbed to the report's first page. */
@@ -231,6 +250,8 @@ export function adaptCase(engine: EngineCase): {
    *  singleton/duo/trio capability banner on the workbench. */
   pipeline_mode: "singleton" | "duo" | "trio" | "extended";
   member_roles: string[];
+  /** Per-gene mygene.info metadata, keyed by HGNC symbol. */
+  gene_info: Record<string, GeneInfoRow>;
 } {
   const propByVar = new Map(engine.proposals.map((p) => [p.variant_id, p]));
   const variants = engine.variants.map((v) => adaptVariant(v, propByVar.get(v.id)));
@@ -250,13 +271,14 @@ export function adaptCase(engine: EngineCase): {
     proposals: variants
       .filter((v) => v.reclass)
       .map((v) => v.reclass as ReclassProposal),
-    hpo: (engine.hpo ?? []).map((h) => ({ hpo_id: h.hpo_id, label: h.label })),
+    hpo: (engine.hpo ?? []).map((h) => ({ hpo_id: h.hpo_id, label: h.label, definition: h.definition })),
     clinical_history: engine.clinical_history ?? null,
     proband_member: proband
       ? { id: proband.id, sex: proband.sex, affected: proband.affected, sample_name: proband.sample_name }
       : null,
     pipeline_mode: inferPipelineMode(engine),
     member_roles: (engine.pedigree?.members ?? []).map((m) => m.role),
+    gene_info: engine.gene_info ?? {},
   };
 }
 

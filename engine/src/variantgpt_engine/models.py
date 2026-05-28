@@ -63,7 +63,19 @@ class ClinicalHistory(BaseModel):
 class HPOTerm(BaseModel):
     hpo_id: str  # e.g. "HP:0001250"
     label: Optional[str] = None
+    definition: Optional[str] = None  # plain-English description from HPO OBO
     source: Literal["manual", "llm_confirmed"] = "manual"
+
+
+class GeneInfo(BaseModel):
+    """Gene-level descriptive metadata for the report. Fetched from
+    mygene.info per case at annotation time, keyed by HGNC symbol on the
+    CaseEmission so we don't bloat each variant with redundant gene prose."""
+    symbol: str
+    name: Optional[str] = None              # "trio Rho guanine nucleotide exchange factor"
+    summary: Optional[str] = None           # NCBI Entrez summary — a paragraph of gene function
+    type_of_gene: Optional[str] = None      # "protein-coding", "ncRNA", etc.
+    omim_id: Optional[str] = None           # *number, same value as Variant.omim_id
 
 
 InheritanceModel = Literal[
@@ -93,12 +105,43 @@ class PopulationAF(BaseModel):
 
 
 class PredictorScores(BaseModel):
+    """In-silico predictors. All scores are optional — populated from
+    dbNSFP via myvariant.info when available. Score conventions:
+      - alphamissense:   [0..1] high = damaging   (ClinGen calibrated PP3 at 0.564, BP4 at 0.116)
+      - revel:           [0..1] high = damaging   (ClinGen PP3 at 0.644, BP4 at 0.290)
+      - cadd:            PHRED-scaled; >20 = top 1% deleterious
+      - spliceai:        [0..1] max delta score; >0.5 = high-confidence splice impact
+      - phylop:          rankscore (vertebrate); high = conserved
+      - gerp:            rejected substitutions; high = conserved
+      - sift_score:      [0..1] LOW = damaging (SIFT convention; <0.05 = deleterious)
+      - polyphen2_hvar:  [0..1] high = damaging  (>0.957 probably damaging, 0.453-0.957 possibly damaging)
+      - polyphen2_hdiv:  [0..1] high = damaging  (training set: disease vs neutral)
+      - mutation_taster: [0..1] high = damaging
+      - lrt:             [0..1] high = damaging
+      - fathmm:          score < -1.5 = damaging (FATHMM convention)
+      - provean:         score < -2.5 = damaging (PROVEAN convention)
+      - metasvm:         ensemble; score > 0 = damaging
+      - metalr:          ensemble [0..1] high = damaging
+      - vest4:           [0..1] high = damaging
+    Direction (low vs high = damaging) is preserved as-is from dbNSFP so
+    the frontend can render each one with its native convention.
+    """
     alphamissense: Optional[float] = None
     revel: Optional[float] = None
     cadd: Optional[float] = None
     spliceai: Optional[float] = None
     phylop: Optional[float] = None
     gerp: Optional[float] = None
+    sift_score: Optional[float] = None
+    polyphen2_hvar: Optional[float] = None
+    polyphen2_hdiv: Optional[float] = None
+    mutation_taster: Optional[float] = None
+    lrt: Optional[float] = None
+    fathmm: Optional[float] = None
+    provean: Optional[float] = None
+    metasvm: Optional[float] = None
+    metalr: Optional[float] = None
+    vest4: Optional[float] = None
 
 
 CriterionStrength = Literal["VS", "S", "M", "P", "BS", "BP", "BA"]
@@ -207,6 +250,10 @@ class CaseEmission(BaseModel):
     hpo: list[HPOTerm]
     clinical_history: Optional[ClinicalHistory] = None
     qc: QCMetrics = Field(default_factory=QCMetrics)
+    # Per-gene descriptive metadata, keyed by HGNC symbol. Populated once
+    # per case (not per variant) so the report can render a "what does this
+    # gene do" paragraph without duplicating prose across thousands of rows.
+    gene_info: dict[str, GeneInfo] = Field(default_factory=dict)
     variants: list[Variant] = Field(default_factory=list)
     proposals: list[ReclassProposal] = Field(default_factory=list)
     lift_failed: list[dict] = Field(default_factory=list)  # variants that failed liftover

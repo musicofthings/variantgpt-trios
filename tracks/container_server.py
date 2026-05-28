@@ -61,7 +61,7 @@ from variantgpt_engine.build_detect import detect_build  # noqa: E402
 from variantgpt_engine.filter import filter_candidates, proband_carrier_filter  # noqa: E402
 from variantgpt_engine.inheritance import assign_models, compound_het_pass  # noqa: E402
 from variantgpt_engine.joint import merge  # noqa: E402
-from variantgpt_engine.models import Build, CaseEmission, ClinicalHistory, HPOTerm, Variant  # noqa: E402
+from variantgpt_engine.models import Build, CaseEmission, ClinicalHistory, GeneInfo, HPOTerm, Variant  # noqa: E402
 from variantgpt_engine.preprocess import PreprocessConfig, preprocess_vcf  # noqa: E402
 from variantgpt_engine.prioritize import priority  # noqa: E402
 from variantgpt_engine.qc import compute_qc  # noqa: E402
@@ -463,14 +463,19 @@ async def _execute_job(job: dict[str, Any]) -> None:
             # HPO terms — the manifest may carry either bare ids (legacy) or
             # {id, label} objects (post-Intake-clinical-fields). Normalize to
             # a list of (id, label|None) tuples so downstream code is stable.
+            # HPO terms — the manifest may carry: bare id strings (legacy),
+            # {id, label} objects (post-clinical-fields), or {id, label,
+            # definition} objects (post-HPO-descriptions). Normalize to
+            # (id, label|None, definition|None) tuples so downstream code is
+            # stable regardless of manifest age.
             raw_hpo = manifest.get("hpo", [])
-            hpo_entries: list[tuple[str, str | None]] = []
+            hpo_entries: list[tuple[str, str | None, str | None]] = []
             for h in raw_hpo:
                 if isinstance(h, str):
-                    hpo_entries.append((h, None))
+                    hpo_entries.append((h, None, None))
                 elif isinstance(h, dict) and h.get("id"):
-                    hpo_entries.append((h["id"], h.get("label")))
-            hpo_ids = [hid for hid, _ in hpo_entries]
+                    hpo_entries.append((h["id"], h.get("label"), h.get("definition")))
+            hpo_ids = [hid for hid, _, _ in hpo_entries]
 
             # Checkpoint: load any previously-classified variants from cache,
             # then process the remainder in chunks. Each chunk is 500 variants
@@ -654,20 +659,30 @@ async def _execute_job(job: dict[str, Any]) -> None:
                     emit("HPO: catalog unavailable — skipping phenotype matching")
                 await post_status("running")
 
-            # OMIM gene IDs via mygene.info — batched gene-symbol lookup. Quick
-            # (~1 round-trip per 500 symbols) so we don't bother with progress
-            # emits. Provides the OMIM* number for the drawer's "OMIM gene"
-            # link to https://www.omim.org/entry/<id>.
+            # Gene-level lookup via mygene.info — OMIM gene id + NCBI Entrez
+            # gene summary + full name + type-of-gene. Single batched call;
+            # results populate v.omim_id per variant AND a CaseEmission.gene_info
+            # dict so the report can render gene-function prose.
+            gene_info_map: dict[str, GeneInfo] = {}
             if real_mode and variants:
                 unique_genes = {v.gene for v in variants if v.gene}
                 if unique_genes:
-                    emit(f"OMIM: gene lookup for {len(unique_genes)} unique genes via mygene.info")
+                    emit(f"mygene.info: gene metadata lookup for {len(unique_genes)} unique genes")
                     try:
-                        omim_map = await mygene.fetch_omim_for_symbols(unique_genes)
-                        applied = mygene.apply_omim_to_variants(variants, omim_map)
-                        emit(f"OMIM: {applied} variants got an omim_id ({len(omim_map)} genes resolved)")
+                        gene_info_map = await mygene.fetch_gene_info_for_symbols(unique_genes)
+                        # Backfill omim_id on each variant from gene_info_map.
+                        applied = 0
+                        for v in variants:
+                            if v.omim_id or not v.gene:
+                                continue
+                            gi = gene_info_map.get(v.gene)
+                            if gi and gi.omim_id:
+                                v.omim_id = gi.omim_id
+                                applied += 1
+                        summarized = sum(1 for gi in gene_info_map.values() if gi.summary)
+                        emit(f"mygene.info: resolved {len(gene_info_map)} genes ({summarized} with Entrez summary); set omim_id on {applied} variants")
                     except Exception as e:  # noqa: BLE001
-                        emit(f"OMIM: lookup failed (continuing without): {type(e).__name__}: {e}")
+                        emit(f"mygene.info: lookup failed (continuing without): {type(e).__name__}: {e}")
                     await post_status("running")
 
             emit("reclassifying (Indian-cohort baseline)")
@@ -691,9 +706,13 @@ async def _execute_job(job: dict[str, Any]) -> None:
                 case_id=case_id,
                 build=resolved_build,
                 pedigree=pedigree,
-                hpo=[HPOTerm(hpo_id=hid, label=lbl) for hid, lbl in hpo_entries],
+                hpo=[
+                    HPOTerm(hpo_id=hid, label=lbl, definition=defn)
+                    for hid, lbl, defn in hpo_entries
+                ],
                 clinical_history=clinical_history,
                 qc=qc,
+                gene_info=gene_info_map,
                 variants=variants,
                 proposals=proposals,
                 versions=track_versions,

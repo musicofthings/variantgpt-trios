@@ -19,7 +19,7 @@ const MODE_LABEL: Record<string, string> = {
 /** Case intake (design spec §4.2 + PRD §4.1). Vertical sectioned flow.
  * Final step uploads VCF/BAM to the dev API and triggers an engine run. */
 
-interface HPOEntry { id: string; label?: string; confirmed: boolean; }
+interface HPOEntry { id: string; label?: string; definition?: string; confirmed: boolean; }
 
 const HPO_LABEL: Record<string, string> = {
   "HP:0001250": "Seizure",
@@ -96,7 +96,7 @@ export function Intake() {
   }
   function addFromSearch(hit: HpoHit) {
     if (hpo.some((h) => h.id === hit.id)) return;
-    setHpo([...hpo, { id: hit.id, label: hit.label, confirmed: true }]);
+    setHpo([...hpo, { id: hit.id, label: hit.label, definition: hit.definition, confirmed: true }]);
   }
 
   // Sniff a staged file in the background — extracts sample names from VCF header.
@@ -217,7 +217,7 @@ export function Intake() {
           missing: !!m.missing,
         })),
         consanguineous: pedigree.consanguineous,
-        hpo: hpo.map((h) => ({ id: h.id, label: h.label ?? null })),
+        hpo: hpo.map((h) => ({ id: h.id, label: h.label ?? null, definition: h.definition ?? null })),
         // Clinical context — rendered on page 1 of the report. The engine
         // stores this verbatim into CaseEmission.clinical_history; if any
         // field is empty we still send it so the report layout stays stable.

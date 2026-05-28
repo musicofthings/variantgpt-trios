@@ -3,9 +3,8 @@ import { useParams, useSearchParams, Link } from "react-router-dom";
 import { TierChip } from "../components/TierChip";
 import { ReclassBadge } from "../components/ReclassBadge";
 import { PopulationFreqPanel } from "../components/PopulationFreqPanel";
-import { PredictorGauges } from "../components/PredictorGauges";
 import { useDemoCase } from "../caseData";
-import type { HPOTermRow } from "../caseData";
+import type { GeneInfoRow, HPOTermRow } from "../caseData";
 import type { EvidenceRow, InheritanceModel, VariantRow } from "../types";
 
 /** Clinical report — print-ready, paginated layout.
@@ -53,11 +52,12 @@ export function Report() {
 
   const pedigree = data.caseRow;
   const hpoTerms: HPOTermRow[] = data.hpo ?? [];
-  const hpoLabelById = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const h of hpoTerms) m.set(h.hpo_id, h.label ?? h.hpo_id);
+  const hpoById = useMemo(() => {
+    const m = new Map<string, HPOTermRow>();
+    for (const h of hpoTerms) m.set(h.hpo_id, h);
     return m;
   }, [hpoTerms]);
+  const geneInfoMap: Record<string, GeneInfoRow> = data.gene_info ?? {};
   const ch = data.clinical_history;
   const probandMember = data.proband_member;
   const today = new Date().toISOString().slice(0, 10);
@@ -175,22 +175,31 @@ export function Report() {
           </Section>
 
           {/* HPO phenotype catalog — every HPO term entered for the case,
-              with its human-readable label. A few words per term so the
-              clinician can audit what we're matching against. */}
+              with id, human-readable label, and plain-English definition
+              from the HPO OBO catalog (sourced at intake via EBI OLS4). The
+              definition column gives the clinician several sentences of
+              context per phenotype so the report can be reviewed in
+              isolation from the workbench. */}
           {hpoTerms.length > 0 ? (
             <Section title="Phenotype (HPO terms)">
               <table className="table keep-together" style={{ fontSize: 12, marginTop: 4 }}>
                 <thead>
                   <tr>
                     <th style={{ width: 110 }}>HPO ID</th>
-                    <th>Label</th>
+                    <th style={{ width: 200 }}>Label</th>
+                    <th>Description</th>
                   </tr>
                 </thead>
                 <tbody>
                   {hpoTerms.map((h) => (
                     <tr key={h.hpo_id}>
-                      <td className="mono">{h.hpo_id}</td>
-                      <td>{h.label ?? <em style={{ color: "var(--ink-soft)" }}>(no label resolved)</em>}</td>
+                      <td className="mono" style={{ verticalAlign: "top" }}>{h.hpo_id}</td>
+                      <td style={{ verticalAlign: "top" }}>
+                        {h.label ?? <em style={{ color: "var(--ink-soft)" }}>(no label resolved)</em>}
+                      </td>
+                      <td style={{ verticalAlign: "top", color: "var(--ink-soft)" }}>
+                        {h.definition ?? <em>(no description available; resolve via hpo.jax.org/browse/term/{h.hpo_id})</em>}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -300,7 +309,8 @@ export function Report() {
             index={i + 1}
             total={reportVariants.length}
             caseId={caseId!}
-            hpoLabelById={hpoLabelById}
+            hpoById={hpoById}
+            geneInfoMap={geneInfoMap}
           />
         ))}
 
@@ -325,13 +335,15 @@ export function Report() {
 /** Per-variant detail page — same fields as the workbench's Clinical Card,
  *  plus phenotype relevance + evidence ledger + population AF + predictors.
  *  Wrapped in a .report-page so @media print forces it to a fresh sheet. */
-function VariantDetailPage({ v, index, total, caseId, hpoLabelById }: {
+function VariantDetailPage({ v, index, total, caseId, hpoById, geneInfoMap }: {
   v: VariantRow;
   index: number;
   total: number;
   caseId: string;
-  hpoLabelById: Map<string, string>;
+  hpoById: Map<string, HPOTermRow>;
+  geneInfoMap: Record<string, GeneInfoRow>;
 }) {
+  const geneInfo = v.gene ? geneInfoMap[v.gene] : undefined;
   const STRENGTH_TOKEN: Record<string, string> = {
     VeryStrong: "_VS", Strong: "_S", Moderate: "_M", Supporting: "_Sup", StandAlone: "_BA",
   };
@@ -427,9 +439,24 @@ function VariantDetailPage({ v, index, total, caseId, hpoLabelById }: {
       </Section>
 
       {/* Gene-level prose — one paragraph describing what we know about the
-          gene, plus the disease conditions ClinVar associates with it. */}
+          gene, with the Entrez/NCBI summary from mygene.info as the primary
+          source. Falls back to structured data (OMIM + ClinVar conditions +
+          HPO coverage) when mygene didn't resolve the gene. */}
       <Section title="Gene">
-        <p style={{ fontSize: 12 }}>
+        {geneInfo?.name ? (
+          <div style={{ fontSize: 12, marginBottom: 6 }}>
+            <strong>{geneInfo.symbol}</strong>
+            {" · "}
+            <span style={{ color: "var(--ink-soft)" }}>{geneInfo.name}</span>
+            {geneInfo.type_of_gene ? (
+              <span style={{ color: "var(--ink-soft)" }}> · {geneInfo.type_of_gene}</span>
+            ) : null}
+          </div>
+        ) : null}
+        {geneInfo?.summary ? (
+          <p style={{ fontSize: 12, marginTop: 0 }}>{geneInfo.summary}</p>
+        ) : null}
+        <p style={{ fontSize: 12, marginTop: geneInfo?.summary ? 8 : 0 }}>
           {geneParagraph(v)}
         </p>
       </Section>
@@ -437,25 +464,29 @@ function VariantDetailPage({ v, index, total, caseId, hpoLabelById }: {
       {/* Variant-level prose with phenotype relevance — one paragraph
           describing the variant's molecular consequence, its ACMG
           classification, and (when hpo_matches is non-empty) which of the
-          case's HPO phenotypes the gene matches, with a short label per
-          matched term. */}
+          case's HPO phenotypes the gene matches, with the term label AND
+          its plain-English definition per matched term. */}
       <Section title="Variant findings & phenotype relevance">
         <p style={{ fontSize: 12 }}>
           {variantParagraph(v)}
         </p>
         {v.hpo_matches && v.hpo_matches.length > 0 ? (
           <ul style={{ fontSize: 11, margin: "8px 0 0 16px", padding: 0 }}>
-            {v.hpo_matches.map((hp) => (
-              <li key={hp} style={{ marginBottom: 2 }}>
-                <span className="mono">{hp}</span>
-                {" — "}
-                <span>{hpoLabelById.get(hp) ?? "(no label resolved)"}</span>
-                {" — "}
-                <span style={{ color: "var(--ink-soft)" }}>
-                  documented gene–phenotype association in the HPO catalog for {v.gene}.
-                </span>
-              </li>
-            ))}
+            {v.hpo_matches.map((hp) => {
+              const term = hpoById.get(hp);
+              return (
+                <li key={hp} style={{ marginBottom: 6 }}>
+                  <span className="mono">{hp}</span>
+                  {" — "}
+                  <strong>{term?.label ?? "(no label resolved)"}</strong>
+                  {term?.definition ? (
+                    <div style={{ color: "var(--ink-soft)", marginTop: 2 }}>
+                      {term.definition}
+                    </div>
+                  ) : null}
+                </li>
+              );
+            })}
           </ul>
         ) : null}
       </Section>
@@ -503,9 +534,7 @@ function VariantDetailPage({ v, index, total, caseId, hpoLabelById }: {
 
       {v.predictors ? (
         <Section title="In-silico predictors">
-          <div className="keep-together">
-            <PredictorGauges predictors={v.predictors} />
-          </div>
+          <PredictorTable predictors={v.predictors} />
         </Section>
       ) : null}
 
@@ -525,6 +554,96 @@ function VariantDetailPage({ v, index, total, caseId, hpoLabelById }: {
         </Section>
       ) : null}
     </section>
+  );
+}
+
+/** Detailed in-silico predictor table for the report. Shows every available
+ *  predictor with its raw score, calibration threshold, and a one-glance
+ *  interpretation (Damaging / Tolerated / —). Each predictor has its own
+ *  direction convention; this table renders them all natively so a clinician
+ *  doesn't have to remember that SIFT is low=damaging while PolyPhen is
+ *  high=damaging. */
+type PredictorSpec = {
+  key: keyof import("../types").Predictors;
+  label: string;
+  threshold: number;
+  /** true if HIGH score = damaging (default); false if LOW = damaging. */
+  higherIsPathogenic: boolean;
+  format: (n: number) => string;
+  /** What the threshold means in plain English — shown in the description col. */
+  note: string;
+};
+const PREDICTOR_SPECS: PredictorSpec[] = [
+  { key: "alphamissense",  label: "AlphaMissense", threshold: 0.564,  higherIsPathogenic: true,  format: (n) => n.toFixed(3),
+    note: "ClinGen PP3 ≥0.564 / BP4 ≤0.116" },
+  { key: "revel",          label: "REVEL",         threshold: 0.644,  higherIsPathogenic: true,  format: (n) => n.toFixed(3),
+    note: "ClinGen PP3 ≥0.644 / BP4 ≤0.290" },
+  { key: "cadd",           label: "CADD (PHRED)",  threshold: 25.3,   higherIsPathogenic: true,  format: (n) => n.toFixed(1),
+    note: "ClinGen PP3 ≥25.3; >20 = top 1% deleterious" },
+  { key: "spliceai",       label: "SpliceAI Δ",    threshold: 0.2,    higherIsPathogenic: true,  format: (n) => n.toFixed(3),
+    note: "ClinGen SVI ≥0.2 supporting; ≥0.5 strong splice impact" },
+  { key: "sift_score",     label: "SIFT",          threshold: 0.05,   higherIsPathogenic: false, format: (n) => n.toFixed(3),
+    note: "<0.05 = deleterious (SIFT convention)" },
+  { key: "polyphen2_hvar", label: "PolyPhen2 HVAR",threshold: 0.957,  higherIsPathogenic: true,  format: (n) => n.toFixed(3),
+    note: ">0.957 probably damaging; >0.453 possibly damaging" },
+  { key: "polyphen2_hdiv", label: "PolyPhen2 HDIV",threshold: 0.957,  higherIsPathogenic: true,  format: (n) => n.toFixed(3),
+    note: "Trained on disease vs neutral (HumDiv); same thresholds" },
+  { key: "mutation_taster",label: "MutationTaster",threshold: 0.5,    higherIsPathogenic: true,  format: (n) => n.toFixed(3),
+    note: ">0.5 = damaging" },
+  { key: "lrt",            label: "LRT",           threshold: 0.5,    higherIsPathogenic: true,  format: (n) => n.toFixed(3),
+    note: "Likelihood-ratio test on conservation" },
+  { key: "fathmm",         label: "FATHMM",        threshold: -1.5,   higherIsPathogenic: false, format: (n) => n.toFixed(2),
+    note: "<-1.5 = damaging (FATHMM convention)" },
+  { key: "provean",        label: "PROVEAN",       threshold: -2.5,   higherIsPathogenic: false, format: (n) => n.toFixed(2),
+    note: "<-2.5 = damaging" },
+  { key: "metasvm",        label: "MetaSVM",       threshold: 0,      higherIsPathogenic: true,  format: (n) => n.toFixed(3),
+    note: "Ensemble; >0 = damaging" },
+  { key: "metalr",         label: "MetaLR",        threshold: 0.5,    higherIsPathogenic: true,  format: (n) => n.toFixed(3),
+    note: "Ensemble logistic regression; >0.5 = damaging" },
+  { key: "vest4",          label: "VEST4",         threshold: 0.5,    higherIsPathogenic: true,  format: (n) => n.toFixed(3),
+    note: ">0.5 commonly damaging" },
+  { key: "phylop",         label: "phyloP rank",   threshold: 0.5,    higherIsPathogenic: true,  format: (n) => n.toFixed(3),
+    note: "100-way vertebrate rank; high = conserved" },
+  { key: "gerp",           label: "GERP",          threshold: 2.0,    higherIsPathogenic: true,  format: (n) => n.toFixed(2),
+    note: "Rejected substitutions; >2 = conserved" },
+];
+
+function PredictorTable({ predictors }: { predictors: import("../types").Predictors }) {
+  const rows = PREDICTOR_SPECS.filter((s) => predictors[s.key] != null);
+  if (rows.length === 0) {
+    return (
+      <p style={{ fontSize: 12, color: "var(--ink-soft)" }}>
+        No in-silico predictor scores available for this variant.
+      </p>
+    );
+  }
+  return (
+    <table className="table keep-together" style={{ fontSize: 12 }}>
+      <thead>
+        <tr>
+          <th>Predictor</th>
+          <th className="num">Score</th>
+          <th>Call</th>
+          <th>Interpretation</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((s) => {
+          const v = predictors[s.key]!;
+          const damaging = s.higherIsPathogenic ? v >= s.threshold : v <= s.threshold;
+          return (
+            <tr key={s.key}>
+              <td>{s.label}</td>
+              <td className="num mono">{s.format(v)}</td>
+              <td style={{ color: damaging ? "var(--rust, #b04a2a)" : "var(--ink-soft)" }}>
+                <strong>{damaging ? "Damaging" : "Tolerated"}</strong>
+              </td>
+              <td style={{ color: "var(--ink-soft)", fontSize: 11 }}>{s.note}</td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
   );
 }
 
