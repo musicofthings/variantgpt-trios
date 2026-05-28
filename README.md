@@ -1,35 +1,53 @@
 # VariantGPT
 
-Trio/family germline variant interpretation platform with a South-Asian-aware ACMG reclassification engine.
+South-Asian-aware clinical variant interpretation for trio, duo, and singleton germline cases. Runs ACMG/AMP classification with population-AF reclassification against Indian-cohort databases (IndiGenomes, GenomeAsia, GenomeIndia), HPO phenotype matching, and a print-ready clinical report.
 
-See [VariantGPT_PRD_TRD.md](VariantGPT_PRD_TRD.md) for product/technical requirements and [VariantGPT_Frontend_Design_Spec.md](VariantGPT_Frontend_Design_Spec.md) for the frontend design system.
+See [VariantGPT_PRD_TRD.md](VariantGPT_PRD_TRD.md) for product/technical requirements and [VariantGPT_Frontend_Design_Spec.md](VariantGPT_Frontend_Design_Spec.md) for the frontend design system. For session-by-session state see [HANDOVER.md](HANDOVER.md).
+
+## Architecture
+
+```
+Cloudflare Pages (variantgpt-web)            ← React SPA build (Vite + TS)
+   │
+Cloudflare Worker (variantgpt-api, Hono)     ← /api/* edge surface
+   ├── D1   (variantgpt)                     ← cases, members, jobs, uploads
+   ├── R2   (variantgpt)                     ← VCFs, case.json, reports, caches
+   └── Fly.io machine (variantgpt-engine)    ← Python engine, ~/tracks/container_server.py
+                                                (was Cloudflare Containers; pivoted
+                                                to Fly for memory headroom)
+```
 
 ## Layout
 
 ```
-engine/            Python 3.11+ engine — VCF intake, normalize, joint merge, QC,
-                   inheritance modeling, annotation, ACMG point engine, South
-                   Asian reclassification. CLI + importable library.
+engine/            Python engine — VCF preprocess, joint merge, GATK-style trio QC,
+                   inheritance modeling, VEP REST + myvariant.info annotation, ACMG
+                   point engine, South-Asian reclassification, HPO matching.
+                   Importable library + CLI.
 app/
-  web/             Cloudflare Pages SPA (Vite + React + TypeScript)
-  api/             Cloudflare Workers edge API (Hono, TypeScript)
-tracks/            Ingestion scripts for IndiGenomes / GenomeAsia / GenomeIndia
-notebooks/         Colab notebooks for running the engine end-to-end
-infra/             D1 migrations, wrangler config, AI Gateway config
-data/test/         Truth-set fixtures (GIAB trio refs, ClinVar benchmark)
-.github/workflows/ CI for engine pytest + web build; deploy to Pages + Workers
+  web/             Cloudflare Pages SPA — Home, Intake, Workbench, Report
+  api/             Cloudflare Workers edge API
+tracks/            Engine orchestrator (container_server.py) + ingestion scripts
+                   for population AF tracks
+notebooks/         Colab notebooks for local engine experiments
+infra/             D1 migrations, wrangler config
+data/test/         Truth-set fixtures (demo trio)
+.github/workflows/ CI for engine pytest + web build + Pages/Worker/Fly deploys
 ```
 
-## Status
-
-Milestone 1 (engine core) and scaffold for milestones 7 (edge app) and 9 (frontend) are in place. See PRD §9 for the build order. Heavy genomics (VEP/ANNOVAR, bcftools, liftover) runs off-edge in the Python engine; the edge serves the compact annotated candidate set.
-
 ## Quick start
+
+### Local dev (no Cloudflare required)
+```
+cd app/web
+npm install
+npm run dev          # → http://localhost:5173 (uses Vite dev API middleware)
+```
 
 ### Engine (Python)
 ```
 cd engine
-python -m venv .venv && .venv\Scripts\activate   # PowerShell on Windows
+python -m venv .venv && .venv\Scripts\activate
 pip install -e .[dev]
 variantgpt-engine --help
 pytest
@@ -42,12 +60,19 @@ npm install
 npm run dev          # wrangler dev
 ```
 
-### Web (SPA)
-```
-cd app/web
-npm install
-npm run dev
-```
+### Deploy (CI)
+Push to `main` — `.github/workflows/deploy.yml` deploys engine → api → web in order. See [`infra/DEPLOY.md`](infra/DEPLOY.md) for first-time setup (Cloudflare secrets, Fly tokens, R2 CORS, D1 migrations).
+
+## Pipelines
+
+The home screen offers three pipeline modes; all share the same engine and differ only in pedigree shape:
+
+| Mode | VCFs | Notes |
+|---|---|---|
+| **Singleton** | proband only | De novo cannot be confirmed; comp-het / AR-hom still callable. |
+| **Duo** | proband + 1 parent | De novo only at sites the present parent is 0/0. Trans-phasing partial. |
+| **Trio** | proband + both parents | Full segregation. PS2 (de novo strong) and trans-phased comp-het both available. |
 
 ## Non-diagnostic / research-use only
+
 Every signed report carries the research-use disclaimer (PRD §4.9). Reclassification proposals never auto-commit — a human curator decision is recorded for every tier change (PRD §4.10).
