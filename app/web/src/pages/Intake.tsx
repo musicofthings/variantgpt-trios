@@ -185,7 +185,7 @@ export function Intake() {
         if (sf.kind === "bam") throw new Error("BAM-to-VCF calling is out of scope; please upload a VCF.");
         const target = sf.reassignedTo ?? role;
         const ext = sf.file.name.toLowerCase().endsWith(".gz") ? "vcf.gz" : "vcf";
-        const urlResp = await fetch(
+        const urlResp = await apiFetch(
           api(`/cases/${caseId}/upload-url/${target}?filename=${encodeURIComponent(sf.file.name)}`),
         );
         if (!urlResp.ok) throw new Error(`signing ${role} failed: ${urlResp.status}`);
