@@ -48,17 +48,19 @@ async def fetch_omim_for_symbols(symbols: Iterable[str]) -> dict[str, str]:
     ) as client:
         async def fetch_chunk(chunk: list[str]) -> dict[str, str]:
             async with sem:
-                # Build a Lucene OR query of `symbol:SYM` terms. mygene treats
-                # symbol as a field-qualified term.
-                q = " OR ".join(f"symbol:{s}" for s in chunk)
+                # mygene /v3/query POST batch interface: comma-separated `q`
+                # + `scopes=symbol` returns one response item per input symbol
+                # (or `{notfound: True}` for misses). Much cleaner than the
+                # previous OR-Lucene approach which was silently returning
+                # `[{notfound: true}]` for every symbol.
                 try:
                     resp = await client.post(
                         MYGENE_QUERY,
                         data={
-                            "q": q,
+                            "q": ",".join(chunk),
+                            "scopes": "symbol",
                             "species": "human",
                             "fields": "symbol,MIM",
-                            "size": str(len(chunk) * 2),  # allow multi-hit per symbol
                         },
                     )
                     resp.raise_for_status()
@@ -67,15 +69,18 @@ async def fetch_omim_for_symbols(symbols: Iterable[str]) -> dict[str, str]:
                     log.warning("mygene chunk failed: %s", e)
                     return {}
             chunk_out: dict[str, str] = {}
-            for hit in data.get("hits", []):
-                sym = hit.get("symbol")
+            if not isinstance(data, list):
+                return chunk_out
+            for hit in data:
+                if not isinstance(hit, dict) or hit.get("notfound"):
+                    continue
+                sym = hit.get("symbol") or hit.get("query")
                 mim = hit.get("MIM")
                 if not sym or not mim:
                     continue
                 if isinstance(mim, list):
                     mim = mim[0] if mim else None
                 if mim:
-                    # First hit wins (mygene returns by relevance score).
                     chunk_out.setdefault(str(sym), str(mim))
             return chunk_out
 
@@ -124,12 +129,15 @@ async def fetch_gene_info_for_symbols(symbols: Iterable[str]) -> dict[str, GeneI
     ) as client:
         async def fetch_chunk(chunk: list[str]) -> dict[str, GeneInfo]:
             async with sem:
-                q = " OR ".join(f"symbol:{s}" for s in chunk)
+                # mygene /v3/query POST batch interface: comma-separated `q`
+                # + `scopes=symbol`. Response is a flat list, one entry per
+                # input symbol (with `{notfound: True}` for misses).
                 try:
                     resp = await client.post(
                         MYGENE_QUERY,
                         data={
-                            "q": q,
+                            "q": ",".join(chunk),
+                            "scopes": "symbol",
                             "species": "human",
                             # mygene field reference:
                             #   name           – gene full name ("trio Rho guanine ...")
@@ -137,7 +145,6 @@ async def fetch_gene_info_for_symbols(symbols: Iterable[str]) -> dict[str, GeneI
                             #   type_of_gene   – protein-coding / ncRNA / pseudo / etc.
                             #   MIM            – OMIM gene id
                             "fields": "symbol,name,summary,type_of_gene,MIM",
-                            "size": str(len(chunk) * 2),
                         },
                     )
                     resp.raise_for_status()
@@ -146,10 +153,14 @@ async def fetch_gene_info_for_symbols(symbols: Iterable[str]) -> dict[str, GeneI
                     log.warning("mygene gene_info chunk failed: %s", e)
                     return {}
             chunk_out: dict[str, GeneInfo] = {}
-            for hit in data.get("hits", []):
-                sym = hit.get("symbol")
+            if not isinstance(data, list):
+                return chunk_out
+            for hit in data:
+                if not isinstance(hit, dict) or hit.get("notfound"):
+                    continue
+                sym = hit.get("symbol") or hit.get("query")
                 if not sym or sym in chunk_out:
-                    continue   # mygene returns by relevance; first wins
+                    continue
                 mim = hit.get("MIM")
                 if isinstance(mim, list):
                     mim = mim[0] if mim else None
