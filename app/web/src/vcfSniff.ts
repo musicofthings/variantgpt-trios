@@ -118,17 +118,86 @@ async function readText(stream: ReadableStream<Uint8Array>, max: number): Promis
   return new TextDecoder("utf-8", { fatal: false }).decode(buf);
 }
 
-/** Heuristic: map a VCF sample name onto a pedigree role. */
-export function autoMapSample(sample: string, role: string): boolean {
-  const s = sample.toLowerCase();
+/** Heuristic: map a VCF sample name (and optionally the filename it came
+ *  from) onto a pedigree role. Permissive by design — clinical labs use
+ *  patient-name-derived sample IDs ("DOE-JOHN_GM00020390_proband") and
+ *  rarely match the literal role string. The user can still override via
+ *  the "Reassign to" / "Use anyway" controls if we get it wrong.
+ *
+ *  Matches (case-insensitive, against either sample name or filename):
+ *    1. Exact role: "proband", "father", "mother"
+ *    2. Substring: "..._proband_...", "...father.vcf", etc.
+ *    3. Family-relation synonyms: dad/papa/sire → father; mom/mama/dam → mother;
+ *       child/patient/index/case/affected/pt → proband
+ *    4. Common abbreviations: prob/proband/p_/p1/p2 → proband;
+ *       fath/fa/f_/f1 → father; moth/mo/m_/m1 → mother
+ *    5. Terminal suffixes: "_P", "_F", "_M", "-P", "-F", "-M" (case-insensitive)
+ *    6. GIAB / Coriell sample IDs (HG002 / NA24385, etc.)
+ */
+export function autoMapSample(sample: string, role: string, filename?: string): boolean {
   const r = role.toLowerCase();
-  if (s === r) return true;
-  if (s.includes(r)) return true;
-  // GIAB / Coriell aliases.
+  // Build the haystack: VCF header sample plus filename minus extension.
+  const hayParts = [sample.toLowerCase()];
+  if (filename) {
+    hayParts.push(
+      filename
+        .toLowerCase()
+        .replace(/\.(vcf\.gz|vcf|bam|bai|gz)$/i, ""),
+    );
+  }
+  const hay = hayParts.join(" ");
+
+  // 1. Trivial cases first.
+  if (hay === r) return true;
+  if (hay.includes(r)) return true;
+
+  // 2. GIAB / Coriell aliases — these come pre-set in benchmark VCFs.
   const GIAB: Record<string, string> = {
     hg002: "proband", na24385: "proband",
     hg003: "father",  na24149: "father",
     hg004: "mother",  na24143: "mother",
   };
-  return GIAB[s] === r;
+  for (const part of hayParts) {
+    if (GIAB[part] === r) return true;
+  }
+
+  // 3. Role-keyword aliases (each list ∋ canonical role + synonyms + abbrevs).
+  const ALIASES: Record<string, string[]> = {
+    proband: [
+      "proband", "prob", "probandus",
+      "child", "patient", "index", "case", "affected", "pt",
+      "p1", "p2",   // sample index when there's a single proband
+    ],
+    father: [
+      "father", "fath", "dad", "daddy", "papa", "pop", "sire", "paternal",
+      "f1", "f2",
+    ],
+    mother: [
+      "mother", "moth", "mom", "mommy", "mama", "mum", "dam", "maternal",
+      "m1", "m2",
+    ],
+    sibling: ["sibling", "sib", "brother", "sister", "bro", "sis"],
+  };
+  const aliases = ALIASES[r] ?? [r];
+
+  // Tokenize the haystack on common separators so we match word-bounded
+  // tokens (not e.g. "case" matching inside "downstream").
+  const tokens = hay.split(/[\s_\-.,;:|/\\()[\]]+/).filter(Boolean);
+  for (const tok of tokens) {
+    if (aliases.includes(tok)) return true;
+  }
+
+  // 4. Terminal single-letter suffix: "..._P" / "...-P" / "...P1".
+  // Map _P→proband, _F→father, _M→mother. Check the original (raw) parts
+  // so the suffix has its case preserved before the lowercase fold.
+  const SUFFIX: Record<string, string> = {
+    P: "proband", F: "father", M: "mother", S: "sibling", C: "proband",
+  };
+  for (const raw of [sample, filename ?? ""]) {
+    if (!raw) continue;
+    const m = raw.match(/[_\-]([PFMSC])\d?$/i);
+    if (m && SUFFIX[m[1].toUpperCase()] === r) return true;
+  }
+
+  return false;
 }

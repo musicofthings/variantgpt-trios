@@ -153,7 +153,7 @@ export function Intake() {
     if (!sf || !sf.sample) return false;
     const member = pedigree.members.find((m) => m.id === role);
     if (!member) return false;
-    const mapped = autoMapSample(sf.sample, member.role);
+    const mapped = autoMapSample(sf.sample, member.role, sf.file.name);
     return !mapped && !sf.ackMismatch && !sf.reassignedTo;
   });
 
@@ -439,7 +439,7 @@ export function Intake() {
                 const sf = staged[m.id];
                 const effectiveRole = sf?.reassignedTo ?? m.id;
                 const effectiveMember = pedigree.members.find((x) => x.id === effectiveRole) ?? m;
-                const nameMatches = sf?.sample ? autoMapSample(sf.sample, effectiveMember.role) : true;
+                const nameMatches = sf?.sample ? autoMapSample(sf.sample, effectiveMember.role, sf.file.name) : true;
                 const showReassign = !!sf?.sample && !nameMatches && !sf.ackMismatch;
                 const otherMembers = pedigree.members.filter((x) => !x.missing && x.id !== m.id);
 
