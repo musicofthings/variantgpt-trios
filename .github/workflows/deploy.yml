@@ -130,6 +130,17 @@ jobs:
     defaults: { run: { working-directory: app/web } }
     env:
       VITE_API_BASE: https://variantgpt-api.shibi-kannan.workers.dev
+      # Clerk publishable key — bundled into the SPA at build time by Vite.
+      # Cloudflare Pages dashboard env vars do NOT reach this build (those
+      # only apply to Pages-managed builds; we use `wrangler pages deploy`
+      # to upload pre-built artifacts). Set this as a GitHub Actions
+      # *variable* (Settings → Secrets and variables → Actions → Variables):
+      #   Name:  VITE_CLERK_PUBLISHABLE_KEY
+      #   Value: pk_test_...   or   pk_live_...
+      # The key is public by design (gets embedded in client JS), so it
+      # belongs in `vars.` not `secrets.`. When unset, the SPA falls back
+      # to dev-mode pass-through (no auth required client-side).
+      VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.VITE_CLERK_PUBLISHABLE_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
