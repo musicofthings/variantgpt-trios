@@ -1,7 +1,6 @@
 """Typer CLI for the engine — `variantgpt-engine`."""
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Optional
 

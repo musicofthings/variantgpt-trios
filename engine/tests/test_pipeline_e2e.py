@@ -16,10 +16,10 @@ import pytest
 
 cyvcf2 = pytest.importorskip("cyvcf2")  # noqa: F841
 
-from variantgpt_engine.annotation import AnnotationContext, annotate
-from variantgpt_engine.inheritance import assign_models, compound_het_pass
-from variantgpt_engine.joint import merge
-from variantgpt_engine.pedigree import load_ped
+from variantgpt_engine.annotation import AnnotationContext, annotate  # noqa: E402
+from variantgpt_engine.inheritance import assign_models, compound_het_pass  # noqa: E402
+from variantgpt_engine.joint import merge  # noqa: E402
+from variantgpt_engine.pedigree import load_ped  # noqa: E402
 
 
 FIXTURE = Path(__file__).resolve().parents[2] / "data" / "test" / "synthetic_trio"

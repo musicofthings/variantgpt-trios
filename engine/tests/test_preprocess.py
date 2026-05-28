@@ -79,7 +79,7 @@ def test_multiallelic_split(tmp_path: Path):
     out = tmp_path / "out.vcf"
     _write(inp, "chr1\t100\t.\tA\tT,C\t40\tPASS\t.\tGT:DP:GQ\t1/2:30:50\n")
     rep = preprocess_vcf(inp, out)
-    data_rows = [ln for lnn in out.read_text().splitlines() if not ln.startswith("#")]
+    data_rows = [ln for ln in out.read_text().splitlines() if not ln.startswith("#")]
     assert len(data_rows) == 2
     assert rep.multi_allelic_split == 1
 

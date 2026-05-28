@@ -43,11 +43,10 @@ calls `preprocess_vcf` per uploaded VCF before joint-matrix construction.
 from __future__ import annotations
 
 import gzip
-import io
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import IO, Iterator, Optional
+from typing import IO, Optional
 
 
 @dataclass

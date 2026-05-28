@@ -1,7 +1,7 @@
 """Boundary tests for the ACMG point engine (PRD §8)."""
 from __future__ import annotations
 
-from variantgpt_engine.acmg.engine import tier_for, DEFAULT_THRESHOLDS
+from variantgpt_engine.acmg.engine import tier_for
 
 
 def test_tier_boundaries():

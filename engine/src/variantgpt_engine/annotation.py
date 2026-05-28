@@ -16,7 +16,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Optional
 
-from .annotation_sources import gnomad, indigenomes
+from .annotation_sources import gnomad
 from .annotation_sources.csq import apply_csq
 from .annotation_sources.tabix_track import TrackConfig, lookup_all as tabix_lookup
 from .joint import JointVariant

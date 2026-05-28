@@ -34,7 +34,6 @@ from typing import Callable, Iterable, Optional
 
 import httpx
 
-from ..joint import JointVariant
 from ..models import PopulationAF, Variant
 
 log = logging.getLogger(__name__)

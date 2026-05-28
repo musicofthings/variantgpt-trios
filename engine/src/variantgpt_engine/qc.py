@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Iterable
 
 from .joint import JointVariant
-from .models import Affected, Pedigree, QCMetrics, Sex
+from .models import Pedigree, QCMetrics
 
 
 def compute_qc(joint: Iterable[JointVariant], pedigree: Pedigree) -> QCMetrics:

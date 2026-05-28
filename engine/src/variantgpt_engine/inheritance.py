@@ -26,7 +26,7 @@ runs in `compound_het_pass` after annotation has assigned a gene per variant.
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Iterable, Optional
+from typing import Optional
 
 from .joint import JointVariant
 from .models import Affected, InheritanceModel, Pedigree, Sex
@@ -111,7 +111,6 @@ def assign_models(
 ) -> tuple[list[InheritanceModel], str]:
     members = {m.id: m for m in pedigree.members}
     affected = {mid for mid, m in members.items() if m.affected == Affected.affected}
-    unaffected = {mid for mid, m in members.items() if m.affected == Affected.unaffected}
     parents = _parents_of(pedigree)
 
     models: list[InheritanceModel] = []

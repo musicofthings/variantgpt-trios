@@ -15,7 +15,6 @@ Tier mapping (config-driven; see DEFAULT_THRESHOLDS):
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable
 
 from ..models import EvidenceItem, Tier, Variant
 from .points import STRENGTH_POINTS, points_for
