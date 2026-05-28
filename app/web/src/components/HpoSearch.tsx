@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api } from "../apiBase";
+import { api, apiFetch } from "../apiBase";
 
 export interface HpoHit {
   id: string;          // "HP:0001250"
@@ -49,7 +49,7 @@ export function HpoSearch({ excludeIds, onPick, placeholder, autoFocus }: Props)
     const t = setTimeout(async () => {
       setLoading(true); setError(null);
       try {
-        const res = await fetch(api(`/hpo/search?q=${encodeURIComponent(q.trim())}&limit=12`), {
+        const res = await apiFetch(api(`/hpo/search?q=${encodeURIComponent(q.trim())}&limit=12`), {
           signal: ctrl.signal,
         });
         if (!res.ok) throw new Error(`status ${res.status}`);

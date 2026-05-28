@@ -23,15 +23,17 @@
  * — Clerk's `useAuth().getToken()` JWT goes into the Authorization header
  * so the Worker can validate against Clerk's JWKS).
  */
-import { ReactNode } from "react";
+import { ReactNode, useEffect } from "react";
 import {
   ClerkProvider,
   RedirectToSignIn,
   SignedIn,
   SignedOut,
   UserButton,
+  useAuth,
   useUser,
 } from "@clerk/clerk-react";
+import { setTokenProvider } from "./apiBase";
 
 const PUBLISHABLE_KEY = (import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string | undefined) || "";
 
@@ -51,12 +53,34 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
   return (
     <ClerkProvider publishableKey={PUBLISHABLE_KEY}>
-      <SignedIn>{children}</SignedIn>
+      <SignedIn>
+        <TokenBridge />
+        {children}
+      </SignedIn>
       <SignedOut>
         <RedirectToSignIn />
       </SignedOut>
     </ClerkProvider>
   );
+}
+
+/** Bridges Clerk's `useAuth().getToken()` into the apiBase module so any
+ *  `apiFetch(...)` call (anywhere in the app) automatically picks up a
+ *  fresh JWT. Mounted inside <SignedIn> so the hook is guaranteed to be
+ *  authenticated when this component renders. */
+function TokenBridge() {
+  const { getToken } = useAuth();
+  useEffect(() => {
+    setTokenProvider(async () => {
+      try {
+        return await getToken();
+      } catch {
+        return null;
+      }
+    });
+    return () => setTokenProvider(null);
+  }, [getToken]);
+  return null;
 }
 
 /** Small chip rendered at the bottom of the sidebar. Shows the user's

@@ -16,6 +16,17 @@ export type Bindings = {
   OPENROUTER_API_KEY: string;
   OPENROUTER_MODEL_NARRATIVE: string;
   OPENROUTER_MODEL_HPO: string;
+
+  /** Clerk JWT validation.
+   *  - CLERK_ISSUER: e.g. "https://your-app.clerk.accounts.dev" (Clerk dashboard
+   *                 → Configure → API keys → "Issuer URL"). When unset, auth
+   *                 is disabled and the Worker accepts unauthenticated requests
+   *                 (matches the SPA's dev-mode pass-through).
+   *  - CLERK_AUDIENCE: optional. If set, must match `aud` in the JWT. Usually
+   *                  the same as your Clerk instance URL.
+   */
+  CLERK_ISSUER?: string;
+  CLERK_AUDIENCE?: string;
 };
 
 export type Variables = {

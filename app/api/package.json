@@ -12,6 +12,7 @@
   "dependencies": {
     "aws4fetch": "^1.0.20",
     "hono": "^4.6.3",
+    "jose": "^6.2.3",
     "zod": "^3.23.8"
   },
   "devDependencies": {

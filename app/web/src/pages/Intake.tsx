@@ -6,7 +6,7 @@ import { RunMonitor, useJobStatus } from "../components/RunMonitor";
 import { HpoSearch, type HpoHit } from "../components/HpoSearch";
 import { pedigreeForMode, type PedigreeState } from "../types-pedigree";
 import { autoMapSample, sniffFile } from "../vcfSniff";
-import { api } from "../apiBase";
+import { api, apiFetch } from "../apiBase";
 
 /** Mode → human label for the topbar pill. Drives only display; the engine
  *  reasons about whichever members the pedigree contains. */
@@ -231,7 +231,7 @@ export function Intake() {
         history,  // back-compat for older engine builds expecting flat `history`
         files,
       };
-      const runResp = await fetch(api(`/cases/${caseId}/run`), {
+      const runResp = await apiFetch(api(`/cases/${caseId}/run`), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(manifest),

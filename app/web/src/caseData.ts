@@ -227,6 +227,10 @@ export function adaptCase(engine: EngineCase): {
   hpo: HPOTermRow[];
   clinical_history: ClinicalHistory | null;
   proband_member: { id: string; sex: string; affected: string; sample_name?: string } | null;
+  /** Pipeline shape inferred from the case.json pedigree. Drives the
+   *  singleton/duo/trio capability banner on the workbench. */
+  pipeline_mode: "singleton" | "duo" | "trio" | "extended";
+  member_roles: string[];
 } {
   const propByVar = new Map(engine.proposals.map((p) => [p.variant_id, p]));
   const variants = engine.variants.map((v) => adaptVariant(v, propByVar.get(v.id)));
@@ -251,7 +255,28 @@ export function adaptCase(engine: EngineCase): {
     proband_member: proband
       ? { id: proband.id, sex: proband.sex, affected: proband.affected, sample_name: proband.sample_name }
       : null,
+    pipeline_mode: inferPipelineMode(engine),
+    member_roles: (engine.pedigree?.members ?? []).map((m) => m.role),
   };
+}
+
+/** Infer pipeline mode from the case.json pedigree. We compare the SET of
+ *  member roles present (NOT counts — a "sibling" alone is still effectively
+ *  a singleton from an inheritance-reasoning standpoint).
+ *  - singleton: proband only (or proband + non-parent members)
+ *  - duo:       proband + exactly one parent (father OR mother)
+ *  - trio:      proband + both parents
+ *  - extended:  trio + siblings / other relatives
+ */
+function inferPipelineMode(engine: EngineCase): "singleton" | "duo" | "trio" | "extended" {
+  const roles = new Set((engine.pedigree?.members ?? []).map((m) => m.role));
+  const hasFather = roles.has("father");
+  const hasMother = roles.has("mother");
+  const parents = (hasFather ? 1 : 0) + (hasMother ? 1 : 0);
+  if (parents === 2 && roles.size > 3) return "extended";
+  if (parents === 2) return "trio";
+  if (parents === 1) return "duo";
+  return "singleton";
 }
 
 const cache = new Map<string, ReturnType<typeof adaptCase>>();

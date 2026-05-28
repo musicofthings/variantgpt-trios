@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api } from "../apiBase";
+import { api, apiFetch } from "../apiBase";
 
 export type RunStatus = "queued" | "running" | "ready" | "error" | "unknown";
 
@@ -26,7 +26,7 @@ export function useJobStatus(caseId: string | undefined, intervalMs = 1000): Job
 
     async function tick() {
       try {
-        const r = await fetch(api(`/cases/${caseId}/status`));
+        const r = await apiFetch(api(`/cases/${caseId}/status`));
         if (!r.ok) throw new Error(`status ${r.status}`);
         const j = (await r.json()) as JobStatus;
         if (cancelled) return;

@@ -48,7 +48,8 @@ def test_reduce_gt_multiallelic():
 
 
 def test_drops_filtered_records(tmp_path: Path):
-    inp = tmp_path / "in.vcf"; out = tmp_path / "out.vcf"
+    inp = tmp_path / "in.vcf"
+    out = tmp_path / "out.vcf"
     _write(inp, "chr1\t100\t.\tA\tT\t40\tLowQual\t.\tGT:DP:GQ\t0/1:30:50\n")
     rep = preprocess_vcf(inp, out)
     assert rep.dropped_filtered == 1
@@ -56,14 +57,16 @@ def test_drops_filtered_records(tmp_path: Path):
 
 
 def test_drops_low_qual(tmp_path: Path):
-    inp = tmp_path / "in.vcf"; out = tmp_path / "out.vcf"
+    inp = tmp_path / "in.vcf"
+    out = tmp_path / "out.vcf"
     _write(inp, "chr1\t100\t.\tA\tT\t10\tPASS\t.\tGT:DP:GQ\t0/1:30:50\n")
     rep = preprocess_vcf(inp, out)
     assert rep.dropped_low_qual == 1
 
 
 def test_gt_low_gq_becomes_missing(tmp_path: Path):
-    inp = tmp_path / "in.vcf"; out = tmp_path / "out.vcf"
+    inp = tmp_path / "in.vcf"
+    out = tmp_path / "out.vcf"
     _write(inp, "chr1\t100\t.\tA\tT\t40\tPASS\t.\tGT:DP:GQ\t0/1:30:5\n")
     rep = preprocess_vcf(inp, out, config=PreprocessConfig(drop_hom_ref=False))
     body = out.read_text()
@@ -72,16 +75,18 @@ def test_gt_low_gq_becomes_missing(tmp_path: Path):
 
 
 def test_multiallelic_split(tmp_path: Path):
-    inp = tmp_path / "in.vcf"; out = tmp_path / "out.vcf"
+    inp = tmp_path / "in.vcf"
+    out = tmp_path / "out.vcf"
     _write(inp, "chr1\t100\t.\tA\tT,C\t40\tPASS\t.\tGT:DP:GQ\t1/2:30:50\n")
     rep = preprocess_vcf(inp, out)
-    data_rows = [l for l in out.read_text().splitlines() if not l.startswith("#")]
+    data_rows = [ln for lnn in out.read_text().splitlines() if not ln.startswith("#")]
     assert len(data_rows) == 2
     assert rep.multi_allelic_split == 1
 
 
 def test_dedup(tmp_path: Path):
-    inp = tmp_path / "in.vcf"; out = tmp_path / "out.vcf"
+    inp = tmp_path / "in.vcf"
+    out = tmp_path / "out.vcf"
     _write(
         inp,
         "chr1\t100\t.\tA\tT\t40\tPASS\t.\tGT:DP:GQ\t0/1:30:50\n"
@@ -93,14 +98,16 @@ def test_dedup(tmp_path: Path):
 
 
 def test_drops_hom_ref(tmp_path: Path):
-    inp = tmp_path / "in.vcf"; out = tmp_path / "out.vcf"
+    inp = tmp_path / "in.vcf"
+    out = tmp_path / "out.vcf"
     _write(inp, "chr1\t100\t.\tA\tT\t40\tPASS\t.\tGT:DP:GQ\t0/0:30:50\n")
     rep = preprocess_vcf(inp, out)
     assert rep.dropped_hom_ref == 1
 
 
 def test_sort_and_chrom_normalize(tmp_path: Path):
-    inp = tmp_path / "in.vcf"; out = tmp_path / "out.vcf"
+    inp = tmp_path / "in.vcf"
+    out = tmp_path / "out.vcf"
     _write(
         inp,
         "2\t100\t.\tA\tT\t40\tPASS\t.\tGT:DP:GQ\t0/1:30:50\n"
@@ -109,6 +116,6 @@ def test_sort_and_chrom_normalize(tmp_path: Path):
         "X\t1\t.\tA\tT\t40\tPASS\t.\tGT:DP:GQ\t0/1:30:50\n",
     )
     rep = preprocess_vcf(inp, out)
-    chroms = [l.split("\t")[0] for l in out.read_text().splitlines() if not l.startswith("#")]
+    chroms = [ln.split("\t")[0] for ln in out.read_text().splitlines() if not ln.startswith("#")]
     assert chroms == ["chr1", "chr1", "chr2", "chrX"]
     assert rep.output_records == 4

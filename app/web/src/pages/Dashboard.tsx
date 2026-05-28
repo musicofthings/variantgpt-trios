@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useDemoCase } from "../caseData";
-import { api } from "../apiBase";
+import { api, apiFetch } from "../apiBase";
 
 interface CaseListItem {
   caseId: string;
@@ -29,7 +29,7 @@ export function Dashboard() {
     if (!confirm(`Delete ${hint}?\n\nThis removes the R2 uploads, case.json, and all database rows.\nThis cannot be undone.`)) return;
     setBusy(caseId); setError(null); setNotice(null);
     try {
-      const r = await fetch(api(`/cases/${caseId}`), { method: "DELETE" });
+      const r = await apiFetch(api(`/cases/${caseId}`), { method: "DELETE" });
       const j: { ok?: boolean; r2Purged?: number; error?: string } = await r.json().catch(() => ({}));
       if (!r.ok || !j.ok) throw new Error(j.error ?? `status ${r.status}`);
       setNotice(`Deleted ${caseId} (${j.r2Purged ?? 0} R2 objects).`);
@@ -45,7 +45,7 @@ export function Dashboard() {
     if (!confirm(`Recover ${caseId}?\n\nRebuilds the database rows from the R2 uploads. After recovery you'll need to re-open the case and re-enter the pedigree + click Run.`)) return;
     setBusy(caseId); setError(null); setNotice(null);
     try {
-      const r = await fetch(api(`/cases/${caseId}/recover`), { method: "POST" });
+      const r = await apiFetch(api(`/cases/${caseId}/recover`), { method: "POST" });
       const j: { ok?: boolean; role_count?: number; files?: string[]; error?: string } = await r.json().catch(() => ({}));
       if (!r.ok || !j.ok) throw new Error(j.error ?? `status ${r.status}`);
       setNotice(`Recovered ${caseId}: ${j.role_count} files (${(j.files ?? []).join(", ")}). Open the case and click Run to start analysis.`);
@@ -61,7 +61,7 @@ export function Dashboard() {
     if (!confirm(`Re-run analysis on ${caseId}?\nUses the same uploads from the previous run — no re-upload needed.`)) return;
     setBusy(caseId); setError(null); setNotice(null);
     try {
-      const r = await fetch(api(`/cases/${caseId}/rerun`), { method: "POST" });
+      const r = await apiFetch(api(`/cases/${caseId}/rerun`), { method: "POST" });
       const j: { ok?: boolean; status?: string; error?: string } = await r.json().catch(() => ({}));
       if (!r.ok || !j.ok) throw new Error(j.error ?? `status ${r.status}`);
       setNotice(`Re-running ${caseId}…`);
@@ -77,7 +77,7 @@ export function Dashboard() {
     if (!confirm("Sweep failed runs and orphaned runs (running >30 min)?\nThis deletes their R2 uploads and DB rows.")) return;
     setBusy("cleanup"); setError(null); setNotice(null);
     try {
-      const r = await fetch(api(`/cases/cleanup`), {
+      const r = await apiFetch(api(`/cases/cleanup`), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ olderThanMinutes: 30 }),
@@ -100,7 +100,7 @@ export function Dashboard() {
     let timer: ReturnType<typeof setTimeout> | undefined;
     async function load() {
       try {
-        const r = await fetch(api("/cases"));
+        const r = await apiFetch(api("/cases"));
         if (!r.ok) throw new Error(`/api/cases ${r.status}`);
         const j = await r.json();
         if (cancelled) return;

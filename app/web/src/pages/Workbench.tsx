@@ -7,7 +7,7 @@ import { PredictorGauges } from "../components/PredictorGauges";
 import { RunMonitor, useJobStatus } from "../components/RunMonitor";
 import { useNavigate, useParams } from "react-router-dom";
 import { useDemoCase } from "../caseData";
-import { api } from "../apiBase";
+import { api, apiFetch } from "../apiBase";
 import type { InheritanceModel, Tier, VariantRow } from "../types";
 
 type SortKey = "gene" | "tier" | "consequence" | "af_global" | "af_sas" | "af_indi" | "priority" | "reclass" | null;
@@ -309,6 +309,14 @@ export function Workbench() {
           Generate report{selectedForReport.size > 0 ? ` (${selectedForReport.size})` : ""}
         </button>
       </div>
+
+      {/* Pipeline-capability banner — explicit for singleton/duo modes so
+          curators see why some criteria are weaker than they'd be in a
+          full trio. Trio (default) shows no banner; extended pedigrees
+          surface a neutral "additional members" note. */}
+      {data?.pipeline_mode && data.pipeline_mode !== "trio" ? (
+        <PipelineModeBanner mode={data.pipeline_mode} roles={data.member_roles} />
+      ) : null}
 
       {/* Run banner — visible for any job state (running / queued / ready /
           error) as long as we have job data AND the user hasn't dismissed
@@ -1046,6 +1054,92 @@ function LiveRerunBanner({
   );
 }
 
+/** Pipeline-mode capability banner. Tells the curator which ACMG criteria
+ *  and inheritance models silently degrade because not all family members
+ *  are present. Renders only for singleton / duo / extended; trio is the
+ *  default and shows no banner. */
+function PipelineModeBanner({ mode, roles }: {
+  mode: "singleton" | "duo" | "trio" | "extended";
+  roles: string[];
+}) {
+  const hasFather = roles.includes("father");
+  const hasMother = roles.includes("mother");
+  const presentParent = hasFather ? "father" : hasMother ? "mother" : null;
+
+  const label =
+    mode === "singleton" ? "Singleton mode"
+    : mode === "duo" ? `Duo mode · proband + ${presentParent}`
+    : "Extended pedigree";
+
+  const limits: { title: string; detail: string }[] = [];
+  if (mode === "singleton") {
+    limits.push({
+      title: "PS2 (de novo Strong) unavailable",
+      detail: "Both parents required to confirm de novo. PM6 (Moderate) is also unavailable without at least one parental 0/0 call.",
+    });
+    limits.push({
+      title: "Compound het is genotype-only",
+      detail: "Two hets in the same gene are flagged but cannot be trans-phased without parental segregation; some calls may be cis (single-allele) artifacts.",
+    });
+    limits.push({
+      title: "Het inherited cannot be sourced",
+      detail: "Without parents we cannot distinguish inherited hets from de novo singletons; all hets are reported as candidates.",
+    });
+  } else if (mode === "duo") {
+    limits.push({
+      title: "PS2 limited to PM6 (Moderate)",
+      detail: `De novo can only be claimed at sites the ${presentParent} is confidently 0/0; the missing parent's genotype is assumed reference. PRD §7 caps duo de novo at PM6.`,
+    });
+    limits.push({
+      title: "Trans-phasing is partial",
+      detail: `Compound het pairs where one variant is inherited from the missing parent cannot be confirmed; we surface them as candidate comp-het but the trans claim is provisional.`,
+    });
+  } else if (mode === "extended") {
+    limits.push({
+      title: "Additional family members detected",
+      detail: `Pedigree includes ${roles.filter((r) => !["proband", "father", "mother"].includes(r)).join(", ")}. Inheritance reasoning uses the trio core (proband + parents); additional members contribute to segregation evidence (PP1) when affected status is known.`,
+    });
+  }
+
+  // Color: rust accent for singleton (most degraded), warm sand for duo,
+  // neutral for extended.
+  const accent =
+    mode === "singleton" ? "var(--rust, #b04a2a)"
+    : mode === "duo" ? "var(--accent, #b04a2a)"
+    : "var(--ink-soft)";
+  const bg =
+    mode === "singleton" ? "rgba(180,84,30,0.06)"
+    : mode === "duo" ? "rgba(180,84,30,0.04)"
+    : "var(--surface-sunken)";
+
+  return (
+    <div
+      className="card"
+      style={{
+        marginBottom: 12,
+        padding: "10px 14px",
+        border: `1px solid ${accent}`,
+        background: bg,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+        <strong style={{ color: accent }}>{label}</strong>
+        <span style={{ color: "var(--ink-soft)", fontSize: 12 }}>
+          · the limitations below apply to classification of variants in this case
+        </span>
+      </div>
+      <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, lineHeight: 1.5 }}>
+        {limits.map((l) => (
+          <li key={l.title} style={{ marginBottom: 3 }}>
+            <strong>{l.title}.</strong>{" "}
+            <span style={{ color: "var(--ink-soft)" }}>{l.detail}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 /** Sortable column header. Click toggles direction; clicking a different
  * column makes that one active (default direction depends on the field). */
 function SortHeader({
@@ -1118,7 +1212,7 @@ function RerunButton({ caseId }: { caseId: string }) {
     if (!confirm(`Re-run analysis on ${caseId}?\nUses the same uploads + pedigree from the previous run.`)) return;
     setBusy(true); setErr(null);
     try {
-      const r = await fetch(api(`/cases/${caseId}/rerun`), { method: "POST" });
+      const r = await apiFetch(api(`/cases/${caseId}/rerun`), { method: "POST" });
       const j: { ok?: boolean; status?: string; error?: string } = await r.json().catch(() => ({}));
       if (!r.ok || !j.ok) throw new Error(j.error ?? `status ${r.status}`);
       // The /status poller picks up from here. Reload to surface the RunMonitor.
