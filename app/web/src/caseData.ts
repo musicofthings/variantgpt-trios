@@ -5,7 +5,7 @@
  * UI-friendly projection of it. This module bridges the two.
  */
 import { useEffect, useState } from "react";
-import { api } from "./apiBase";
+import { api, apiFetch } from "./apiBase";
 import type {
   CaseRow, Criterion, CriterionStrength, EvidenceRow, InheritanceModel,
   PopulationAF, PopulationSource, Predictors, ReclassProposal, Tier, VariantRow,
@@ -310,7 +310,10 @@ export async function loadCase(caseId?: string) {
   const url = caseId && caseId !== "demo-trio-001" ? api(`/cases/${caseId}`) : DEMO_URL;
   if (cache.has(url)) return cache.get(url)!;
   if (inflight.has(url)) return inflight.get(url)!;
-  const p = fetch(url)
+  // Demo URL hits a static asset on Pages (no auth); uploaded cases hit
+  // the Worker and need the Clerk JWT.
+  const fetcher = url === DEMO_URL ? fetch : apiFetch;
+  const p = fetcher(url)
     .then((r) => {
       if (!r.ok) throw new Error(`case fetch ${r.status} for ${url}`);
       return r.json();
