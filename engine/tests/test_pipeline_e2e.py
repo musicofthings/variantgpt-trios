@@ -24,6 +24,18 @@ from variantgpt_engine.pedigree import load_ped  # noqa: E402
 
 FIXTURE = Path(__file__).resolve().parents[2] / "data" / "test" / "synthetic_trio"
 
+# The synthetic_trio fixture is git-ignored — generated locally by
+# tracks/build_demo_vcfs.py. On CI runners (and any fresh checkout) the
+# files don't exist; skip the entire module rather than spam cyvcf2
+# OSErrors. Anyone wanting to run these tests locally should run the
+# builder first.
+if not (FIXTURE / "proband.vcf").exists():
+    pytest.skip(
+        f"synthetic_trio fixture not generated at {FIXTURE}; "
+        "run `python tracks/build_demo_vcfs.py` to materialize it",
+        allow_module_level=True,
+    )
+
 
 def test_synthetic_trio_inheritance_and_compound_het():
     pedigree = load_ped(FIXTURE / "family.ped")
