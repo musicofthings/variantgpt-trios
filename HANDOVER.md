@@ -1,6 +1,6 @@
 # VariantGPT — Session Handover
 
-**Last updated:** 2026-05-28
+**Last updated:** 2026-05-29
 **Working tree:** `D:\Projects\VariantGPT` (git: `musicofthings/variantgpt-trios`, branch `main`)
 **Specs:** [`VariantGPT_PRD_TRD.md`](VariantGPT_PRD_TRD.md) · [`VariantGPT_Frontend_Design_Spec.md`](VariantGPT_Frontend_Design_Spec.md)
 **Deploy:** [`infra/DEPLOY.md`](infra/DEPLOY.md)
@@ -140,9 +140,29 @@ fly.toml                                 shared-cpu-4x, 8192 MB, min_machines_ru
 
 ---
 
+## Validation suite
+
+Three layers live as of 2026-05-29:
+
+| Layer | Where | What it answers |
+|---|---|---|
+| **A. ClinVar audit** | Workbench panel (auto-renders per case) | Per-case tier concordance against ClinVar ≥2★ classifications, with per-row "likely cause" hints |
+| **B. Franklin (Genoox) diff** | `/cases/:caseId/diff` — drop Franklin CSV export | Cross-platform agreement, bucketed BOTH_AGREE / BOTH_DIFFER / FRANKLIN_ONLY / VARIANTGPT_ONLY |
+| **C. GIAB benchmark** | `python tracks/giab_benchmark.py` | Reproducible per-tier precision/recall/F1 + Cohen's κ vs GIAB v4.2.1 truth + ClinVar reference |
+
+Activation guides: [`GIAB_benchmark.md`](GIAB_benchmark.md) for layer C, [`GenomeAsia_config.md`](GenomeAsia_config.md) for the GenomeAsia track. Benchmark numbers go in [`Benchmarks.md`](Benchmarks.md) (template ready, real numbers TBD).
+
+## AI synopsis
+
+Per-variant clinical narrative drafted by Anthropic Claude on demand:
+- Worker route `POST /api/ai/synopsis` ([`app/api/src/routes/ai.ts`](app/api/src/routes/ai.ts)) takes a `VariantPayload + CaseContext`, returns 2–3 paragraphs prefixed `AI-DRAFTED · REVIEW BEFORE SIGNING ·`
+- Routes via Cloudflare AI Gateway when `AI_GATEWAY_ACCOUNT + AI_GATEWAY_ID` set; otherwise direct to `api.anthropic.com`
+- SPA `<AiSynopsis>` in Workbench drawer: manual **Generate** button, result cached in localStorage per (caseId, variantId)
+- System prompt blocks the model from issuing classification decisions; user prompt structured into Variant/Fired ACMG/Predictors/Case-context blocks so it can't hallucinate AFs
+
 ## Known gaps / road ahead
 
-1. **GenomeAsia 100K integration** — task #35, deferred. IndiGen handles bulk of Indian-population coverage; GenomeAsia would round it out for non-Indian South-Asian ancestry. AF schema is already shape-compatible.
+1. **GenomeAsia 100K data ingestion** — task #35 scaffold complete (engine adapter + ingestion CLI + Worker URL signing all wired). Activates the moment `tracks/ingest_genomeasia.py` runs with downloaded VCFs and `GENOMEASIA_R2_PREFIX` is set on the Worker. Data path itself blocked from cloud egress; user runs ingestion from residential/VPN'd network. See [`GenomeAsia_config.md`](GenomeAsia_config.md).
 2. **Worker-side rate limiting on `/api/*`** — not wired. Cloudflare DDoS defaults apply, but no per-user limit.
 3. **LLM HPO extraction + AI synopsis drafting** — PRD §6.7 stub; needs AI Gateway → OpenRouter wiring.
 4. **Server-side PDF generation** — browser print already produces a clean clinical PDF; a `POST /api/cases/:id/report` endpoint that returns a server-rendered PDF would be a nice add for archival.
@@ -189,6 +209,16 @@ The `VITE_API_BASE` is hardcoded in the workflow file itself.
 ---
 
 ## Session log
+
+### 2026-05-29 — Validation suite + GenomeAsia scaffold + AI synopsis
+
+- **Validation A**: `<ClinvarAudit>` panel on Workbench. Auto-renders for any case with ≥2★ ClinVar-classified variants. Buckets: CONCORDANT, RECLASS_AGREE, WEAK_DISCORD, MISSED_PATH, OVERCALLED. Concordance rate colored green ≥85% / rust below. Per-row likely-cause hints (no fired pathogenic criteria → missing ACMG criterion; etc.). Click any row → drawer opens for evidence inspection.
+- **Validation B**: `/cases/:caseId/diff` route + `<FranklinDiff>` component. CSV parser handles Franklin's full schema with header aliasing. Joins by (chr, pos, ref, alt). Bucketed BOTH_AGREE / BOTH_DIFFER / FRANKLIN_ONLY / VARIANTGPT_ONLY. Per-row notes hypothesise divergence cause (`Franklin keeps this; we filtered as common (AF > 1%)`, etc.). Includes a calibration banner noting Franklin uses GenomeAsia internally — explains why some Franklin-only variants close once our GenomeAsia track activates.
+- **Validation C**: `tracks/giab_benchmark.py` CLI. Detection sensitivity vs GIAB v4.2.1 (recall on SNVs and indels, BED-clipped to high-confidence regions). Classification concordance vs ClinVar ≥2★ (confusion matrix, per-tier P/R/F1, Cohen's κ with prose interpretation, discordant-variant punch list with cause hints). Outputs `benchmark.json` + `benchmark.md`. `GIAB_benchmark.md` walks through how to run it.
+- **GenomeAsia 100K scaffold**: engine adapter + ingestion CLI + Worker URL signing all wired. `tracks/ingest_genomeasia.py` reads composite VCFs and writes chrom-partitioned AF TSVs to R2; `annotation_sources/genomeasia.py` reads them back. `maybeGenomeAsiaTemplate()` in the Worker mints one signed URL per chrom (sigv4 requires per-path signing) and encodes the map as `json:<base64>`. Engine activates the moment `GENOMEASIA_R2_PREFIX` Worker secret is set. Host blocks cloud egress; user runs ingestion from residential network. Full activation runbook in [`GenomeAsia_config.md`](GenomeAsia_config.md).
+- **AI synopsis**: Worker `POST /api/ai/synopsis` + Workbench `<AiSynopsis>` component. Anthropic Claude (default haiku, configurable). Routes via Cloudflare AI Gateway when configured. Result cached per (caseId, variantId) in localStorage. System prompt locks model to clinical-narrative role; user prompt structures evidence so model can't invent AFs or criteria. Prefixed `AI-DRAFTED · REVIEW BEFORE SIGNING ·` in-band.
+- **mygene batch interface fix**: discovered while testing pre-flight — the old `q=symbol:A OR symbol:B` OR-Lucene query was silently returning `[{notfound: true}]` for every gene. Switched to documented batch interface `q=A,B,C&scopes=symbol`. OMIM IDs were actually coming from myvariant's dbnsfp.omim overlay path the whole time, not from mygene (the exception was being swallowed).
+- **Permissive sample-name matcher**: clinical lab filenames like `DOE-JOHN_GM00020390_proband_S1` now auto-pass via synonyms + abbreviations + terminal `_P/_F/_M` suffixes considered across both VCF header sample AND filename.
 
 ### 2026-05-28 (later) — Auth enforcement + report richness
 - **Worker-side Clerk JWT** validation (`auth.ts`, `jose` + JWKS); `clerkAuthGated` middleware on `*` with `isPublicPath()` bypass for HMAC webhooks + `/health`
