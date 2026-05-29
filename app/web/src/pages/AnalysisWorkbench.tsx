@@ -1,0 +1,307 @@
+/** /cases/:caseId/analysis — phenotype-driven curation, the intermediate
+ *  screen between the Workbench triage and the final clinical report.
+ *
+ *  Carries the variants shortlisted in the Workbench (checkboxes →
+ *  SELECTION_KEY) and lets the analyst:
+ *    - rank them by phenotype relevance under a selectable algorithm
+ *      (coverage / Resnik / Phrank — all precomputed by the engine),
+ *    - inspect *why* each variant is relevant (per-HPO-term contribution),
+ *    - confirm the final set, then generate the report.
+ *
+ *  The % relevance blends across ALL of the case's HPO terms, so it is most
+ *  informative when more than one term is recorded.
+ */
+import { useEffect, useMemo, useState } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { useDemoCase } from "../caseData";
+import { TierChip } from "../components/TierChip";
+import type { PhenotypeAlgorithm, VariantRow } from "../types";
+import {
+  DEFAULT_PHENO_ALGO, PHENO_ALGORITHMS, PhenotypeBar, phenoPercent, phenoScore,
+} from "../phenotype";
+import {
+  FINAL_KEY, PHENO_ALGO_KEY, SELECTION_KEY, readIdSet, readPhenoAlgo, writeIdSet,
+} from "../selection";
+
+export function AnalysisWorkbench() {
+  const { caseId } = useParams<{ caseId: string }>();
+  const { data, loading, error } = useDemoCase(caseId);
+  const navigate = useNavigate();
+
+  const [algo, setAlgo] = useState<PhenotypeAlgorithm>(
+    () => (caseId ? readPhenoAlgo(caseId, DEFAULT_PHENO_ALGO) : DEFAULT_PHENO_ALGO),
+  );
+  const [final, setFinal] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [seeded, setSeeded] = useState(false);
+
+  // The shortlist carried over from the Workbench.
+  const shortlist = useMemo(() => (caseId ? readIdSet(SELECTION_KEY(caseId)) : new Set<string>()), [caseId]);
+
+  // Shortlisted variants that actually exist in the loaded case, sorted by
+  // the active algorithm's relevance (descending; unscored sink to bottom).
+  const rows = useMemo(() => {
+    if (!data) return [] as VariantRow[];
+    const list = data.variants.filter((v) => shortlist.has(v.id));
+    return [...list].sort((a, b) => phenoPercent(b, algo) - phenoPercent(a, algo));
+  }, [data, shortlist, algo]);
+
+  // Seed the final set from the shortlist once the case has loaded (or from a
+  // previously-saved final selection if the analyst has been here before).
+  useEffect(() => {
+    if (!caseId || !data || seeded) return;
+    const saved = readIdSet(FINAL_KEY(caseId));
+    const valid = new Set([...saved].filter((id) => shortlist.has(id)));
+    setFinal(valid.size > 0 ? valid : new Set(shortlist));
+    setSeeded(true);
+  }, [caseId, data, shortlist, seeded]);
+
+  useEffect(() => {
+    if (caseId && seeded) writeIdSet(FINAL_KEY(caseId), final);
+  }, [caseId, final, seeded]);
+
+  function chooseAlgo(a: PhenotypeAlgorithm) {
+    setAlgo(a);
+    if (caseId) { try { localStorage.setItem(PHENO_ALGO_KEY(caseId), a); } catch { /* ignore */ } }
+  }
+  function toggleFinal(id: string) {
+    setFinal((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  if (loading) return <div className="card">Loading case…</div>;
+  if (error || !data) {
+    return (
+      <div className="card">
+        <p>Could not load case: {error}</p>
+        <Link to={`/cases/${caseId}`}>← Back to workbench</Link>
+      </div>
+    );
+  }
+
+  const hpoTerms = data.hpo ?? [];
+  const algoMeta = PHENO_ALGORITHMS.find((a) => a.id === algo)!;
+
+  return (
+    <>
+      <div className="topbar">
+        <h1>Analysis workbench</h1>
+        <span className="pill mono">{caseId}</span>
+        <span className="pill">{rows.length} shortlisted</span>
+        <span className="pill">{final.size} for report</span>
+        <Link to={`/cases/${caseId}`}><button>← Back to workbench</button></Link>
+        <button
+          className="primary"
+          disabled={final.size === 0}
+          title={final.size === 0 ? "Confirm at least one variant for the report" : ""}
+          onClick={() => {
+            if (!caseId) return;
+            const ids = [...final].join(",");
+            navigate(`/cases/${caseId}/report?variants=${encodeURIComponent(ids)}`);
+          }}
+        >
+          Generate report{final.size > 0 ? ` (${final.size})` : ""}
+        </button>
+      </div>
+
+      {hpoTerms.length === 0 ? (
+        <div className="card">
+          <p style={{ margin: 0 }}>
+            This case has no HPO terms, so phenotype-relevance ranking is unavailable.{" "}
+            <Link to={`/cases/${caseId}`}>Return to the workbench</Link> to select variants directly.
+          </p>
+        </div>
+      ) : shortlist.size === 0 ? (
+        <div className="card">
+          <p style={{ margin: 0 }}>
+            No variants were carried over. On the <Link to={`/cases/${caseId}`}>workbench</Link>,
+            tick the candidate variants and click <strong>Curate in Analysis →</strong>.
+          </p>
+        </div>
+      ) : (
+        <>
+          {/* Phenotype context + algorithm selector */}
+          <section className="card" style={{ marginBottom: 16 }}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "flex-start", justifyContent: "space-between" }}>
+              <div style={{ maxWidth: 560 }}>
+                <h3 style={{ margin: "0 0 6px" }}>Phenotype relevance</h3>
+                <p style={{ fontSize: 13, color: "var(--ink-soft)", lineHeight: 1.6, margin: "0 0 8px" }}>
+                  Each variant is scored 0–100% for how closely its gene matches the case's{" "}
+                  <strong>{hpoTerms.length}</strong> recorded clinical phenotype{hpoTerms.length === 1 ? "" : "s"}.
+                  {hpoTerms.length > 1
+                    ? " The percentage blends the match across all terms — a gene need not match every term to rank highly."
+                    : " With a single HPO term, the percentage reflects this one phenotype; add more terms for a blended relevance signal."}
+                </p>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {hpoTerms.map((h) => (
+                    <span key={h.hpo_id} className="pill mono" title={h.label} style={{ fontSize: 11 }}>
+                      {h.hpo_id}{h.label ? ` · ${h.label}` : ""}
+                    </span>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <label style={{ fontSize: 12, color: "var(--ink-soft)", display: "block", marginBottom: 6 }}>
+                  Ranking algorithm
+                </label>
+                <div role="radiogroup" aria-label="Phenotype ranking algorithm" style={{ display: "inline-flex", border: "1px solid var(--line)", borderRadius: 8, overflow: "hidden" }}>
+                  {PHENO_ALGORITHMS.map((a) => (
+                    <button
+                      key={a.id}
+                      role="radio"
+                      aria-checked={algo === a.id}
+                      title={a.blurb}
+                      onClick={() => chooseAlgo(a.id)}
+                      style={{
+                        border: "none",
+                        borderRight: "1px solid var(--line)",
+                        padding: "6px 12px",
+                        fontSize: 13,
+                        cursor: "pointer",
+                        background: algo === a.id ? "var(--primary-soft)" : "var(--paper)",
+                        color: algo === a.id ? "var(--primary)" : "var(--ink)",
+                        fontWeight: algo === a.id ? 600 : 400,
+                      }}
+                    >
+                      {a.label}
+                    </button>
+                  ))}
+                </div>
+                <p style={{ fontSize: 12, color: "var(--ink-soft)", lineHeight: 1.5, margin: "8px 0 0", maxWidth: 320 }}>
+                  {algoMeta.blurb}
+                </p>
+              </div>
+            </div>
+          </section>
+
+          {/* Ranked shortlist */}
+          <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th style={{ width: 36 }} />
+                  <th style={{ width: 28 }} />
+                  <th style={{ textAlign: "left" }}>Gene</th>
+                  <th style={{ textAlign: "left" }}>HGVS</th>
+                  <th style={{ textAlign: "left" }}>Consequence</th>
+                  <th style={{ width: 64 }}>Tier</th>
+                  <th style={{ width: 150 }}>Relevance ({algoMeta.label})</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((v, i) => {
+                  const score = phenoScore(v, algo);
+                  const pct = phenoPercent(v, algo);
+                  const isOpen = expanded === v.id;
+                  const checked = final.has(v.id);
+                  return (
+                    <RankRow
+                      key={v.id}
+                      v={v}
+                      rank={i + 1}
+                      pct={pct}
+                      checked={checked}
+                      isOpen={isOpen}
+                      caseTermCount={hpoTerms.length}
+                      matched={score?.matched_terms ?? []}
+                      onToggleFinal={() => toggleFinal(v.id)}
+                      onToggleOpen={() => setExpanded(isOpen ? null : v.id)}
+                    />
+                  );
+                })}
+                {rows.length === 0 ? (
+                  <tr><td colSpan={7} style={{ textAlign: "center", color: "var(--ink-soft)", padding: 24 }}>No shortlisted variants.</td></tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
+function RankRow({
+  v, rank, pct, checked, isOpen, caseTermCount, matched, onToggleFinal, onToggleOpen,
+}: {
+  v: VariantRow;
+  rank: number;
+  pct: number;
+  checked: boolean;
+  isOpen: boolean;
+  caseTermCount: number;
+  matched: { hpo_id: string; label?: string; contribution: number }[];
+  onToggleFinal: () => void;
+  onToggleOpen: () => void;
+}) {
+  const hgvs = `${v.hgvs_c ?? ""}${v.hgvs_p ? ` (${v.hgvs_p})` : ""}`;
+  const maxContrib = Math.max(0.0001, ...matched.map((m) => m.contribution));
+  return (
+    <>
+      <tr style={{ cursor: "pointer", opacity: checked ? 1 : 0.55 }}>
+        <td onClick={(e) => e.stopPropagation()} style={{ textAlign: "center" }}>
+          <input type="checkbox" checked={checked} onChange={onToggleFinal} aria-label={`Include ${v.gene ?? v.id} in report`} />
+        </td>
+        <td className="num" onClick={onToggleOpen}>{rank}</td>
+        <td className="mono" onClick={onToggleOpen} title={v.gene}>{v.gene ?? "—"}</td>
+        <td className="mono" onClick={onToggleOpen} title={hgvs} style={{ maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {v.hgvs_c}
+          {v.hgvs_p ? <span style={{ color: "var(--ink-soft)" }}> {v.hgvs_p}</span> : null}
+        </td>
+        <td onClick={onToggleOpen}>{v.consequence ?? "—"}</td>
+        <td onClick={onToggleOpen} style={{ textAlign: "center" }}><TierChip tier={v.baseline_tier} /></td>
+        <td className="num" onClick={onToggleOpen}>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <PhenotypeBar percent={v.phenotype_relevance ? pct : null} width={64} />
+            <span style={{ fontSize: 11, color: "var(--ink-soft)" }}>{isOpen ? "▾" : "▸"}</span>
+          </span>
+        </td>
+      </tr>
+      {isOpen ? (
+        <tr>
+          <td colSpan={7} style={{ background: "var(--paper-2, #fafafa)", padding: "10px 16px 14px" }}>
+            {matched.length === 0 ? (
+              <p style={{ margin: 0, fontSize: 13, color: "var(--ink-soft)" }}>
+                {v.gene ?? "This gene"} has no recorded association with the case's HPO terms under this algorithm.
+              </p>
+            ) : (
+              <>
+                <p style={{ margin: "0 0 8px", fontSize: 12, color: "var(--ink-soft)" }}>
+                  Contributing phenotypes — {matched.length} of {caseTermCount} case term{caseTermCount === 1 ? "" : "s"} drive this gene's {pct.toFixed(0)}% relevance:
+                </p>
+                <div style={{ display: "grid", gap: 6, maxWidth: 620 }}>
+                  {matched.map((m) => (
+                    <div key={m.hpo_id} style={{ display: "grid", gridTemplateColumns: "200px 1fr 48px", alignItems: "center", gap: 8 }}>
+                      <a
+                        href={`https://hpo.jax.org/browse/term/${m.hpo_id}`}
+                        target="_blank" rel="noreferrer"
+                        className="mono" style={{ fontSize: 11, textDecoration: "none" }}
+                        title={m.label}
+                      >
+                        {m.hpo_id}
+                      </a>
+                      <span style={{ height: 7, borderRadius: 4, background: "var(--line, #e5e7eb)", overflow: "hidden" }}>
+                        <span style={{ display: "block", height: "100%", width: `${(m.contribution / maxContrib) * 100}%`, background: "var(--primary, #2563eb)" }} />
+                      </span>
+                      <span className="mono" style={{ fontSize: 11, color: "var(--ink-soft)", textAlign: "right" }}>
+                        {(m.contribution * 100).toFixed(0)}%
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                {matched.some((m) => m.label) ? (
+                  <p style={{ margin: "8px 0 0", fontSize: 11, color: "var(--ink-soft)", lineHeight: 1.5 }}>
+                    {matched.filter((m) => m.label).map((m) => m.label).join(" · ")}
+                  </p>
+                ) : null}
+              </>
+            )}
+          </td>
+        </tr>
+      ) : null}
+    </>
+  );
+}

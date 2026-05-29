@@ -8,7 +8,7 @@ import { useEffect, useState } from "react";
 import { api, apiFetch } from "./apiBase";
 import type {
   CaseRow, Criterion, CriterionStrength, EvidenceRow, InheritanceModel,
-  PopulationAF, PopulationSource, Predictors, ReclassProposal, Tier, VariantRow,
+  PhenotypeScore, PopulationAF, PopulationSource, Predictors, ReclassProposal, Tier, VariantRow,
 } from "./types";
 
 /** Subset of the engine's case.json we actually consume. */
@@ -68,6 +68,11 @@ export interface ClinicalHistory {
   family_history?: string;
 }
 
+interface EnginePhenotypeScore {
+  percent: number;
+  matched_terms: { hpo_id: string; label?: string | null; contribution: number }[];
+}
+
 interface EngineVariant {
   id: string;
   chrom: string;
@@ -83,6 +88,11 @@ interface EngineVariant {
   genomic_hgvs?: string | null;
   omim_id?: string | null;
   hpo_matches?: string[] | null;
+  phenotype_relevance?: {
+    coverage: EnginePhenotypeScore;
+    resnik: EnginePhenotypeScore;
+    phrank: EnginePhenotypeScore;
+  } | null;
   calls?: {
     member_id: string;
     role: string;
@@ -169,6 +179,13 @@ function adaptVariant(ev: EngineVariant, proposal?: EngineProposal): VariantRow 
     genomic_hgvs: ev.genomic_hgvs ?? undefined,
     omim_id: ev.omim_id ?? undefined,
     hpo_matches: ev.hpo_matches ?? undefined,
+    phenotype_relevance: ev.phenotype_relevance
+      ? {
+          coverage: adaptPhenoScore(ev.phenotype_relevance.coverage),
+          resnik: adaptPhenoScore(ev.phenotype_relevance.resnik),
+          phrank: adaptPhenoScore(ev.phenotype_relevance.phrank),
+        }
+      : null,
     inheritance_models: ev.inheritance_models as InheritanceModel[],
     inheritance_confidence: (ev.inheritance_confidence as "high" | "medium" | "low" | undefined) ?? undefined,
     calls: ev.calls ? ev.calls.map((c) => ({
@@ -230,6 +247,17 @@ function adaptVariant(ev: EngineVariant, proposal?: EngineProposal): VariantRow 
       conditions: ev.clinvar.conditions ?? undefined,
       variation_id: ev.clinvar.variation_id ?? undefined,
     } : null,
+  };
+}
+
+function adaptPhenoScore(s: EnginePhenotypeScore): PhenotypeScore {
+  return {
+    percent: s.percent,
+    matched_terms: (s.matched_terms ?? []).map((t) => ({
+      hpo_id: t.hpo_id,
+      label: t.label ?? undefined,
+      contribution: t.contribution,
+    })),
   };
 }
 

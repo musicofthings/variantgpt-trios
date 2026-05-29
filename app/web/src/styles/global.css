@@ -156,6 +156,7 @@ input:focus, textarea:focus, select:focus {
 .variant-table .col-inh   { width: 12%; }
 .variant-table .col-af    { width: 7%;  min-width: 60px; }
 .variant-table .col-tier  { width: 6%;  min-width: 56px; }
+.variant-table .col-pheno { width: 9%;  min-width: 96px; }
 .variant-table .col-delta { width: 7%;  min-width: 60px; }
 
 /* Below 1100px hide low-priority columns rather than wrap. The drawer

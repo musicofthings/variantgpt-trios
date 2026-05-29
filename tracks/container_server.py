@@ -54,7 +54,7 @@ sys.path.insert(0, str(THIS.parents[1] / "engine" / "src"))
 from variantgpt_engine.pedigree import load_ped  # noqa: E402
 from variantgpt_engine.acmg import classify  # noqa: E402
 from variantgpt_engine.annotation import AnnotationContext, annotate  # noqa: E402
-from variantgpt_engine.annotation_sources import genomeasia, hpo_genes, indigenomes, mygene, myvariant, vep_rest  # noqa: E402
+from variantgpt_engine.annotation_sources import genomeasia, hpo_genes, hpo_ontology, indigenomes, mygene, myvariant, vep_rest  # noqa: E402
 from variantgpt_engine.annotation_sources.csq import pick_canonical  # noqa: E402
 from variantgpt_engine import cache  # noqa: E402
 from variantgpt_engine.build_detect import detect_build  # noqa: E402
@@ -62,6 +62,7 @@ from variantgpt_engine.filter import filter_candidates, proband_carrier_filter  
 from variantgpt_engine.inheritance import assign_models, compound_het_pass  # noqa: E402
 from variantgpt_engine.joint import merge  # noqa: E402
 from variantgpt_engine.models import Build, CaseEmission, ClinicalHistory, GeneInfo, HPOTerm, Variant  # noqa: E402
+from variantgpt_engine.phenotype import PhenotypeScorer  # noqa: E402
 from variantgpt_engine.preprocess import PreprocessConfig, preprocess_vcf  # noqa: E402
 from variantgpt_engine.prioritize import priority  # noqa: E402
 from variantgpt_engine.qc import compute_qc  # noqa: E402
@@ -658,26 +659,42 @@ async def _execute_job(job: dict[str, Any]) -> None:
                     emit(f"GenomeAsia: lookup failed (continuing without): {type(e).__name__}: {e}")
                 await post_status("running")
 
-            # HPO phenotype matching — for each variant, see if its gene is
-            # associated with any of the case's HPO terms in the HPO consortium
-            # gene-phenotype catalog. Boosts priority_score for matching
-            # variants so they sort to the top in the workbench's default view.
+            # HPO phenotype scoring — for each variant, grade how close its
+            # gene is to the case's recorded phenotype under three algorithms
+            # (coverage / Resnik BMA / Phrank). All three are precomputed and
+            # baked into case.json so the Analysis Workbench can switch between
+            # them as a display toggle. Boosts priority_score (off Phrank, or
+            # coverage when the ontology is unavailable) so phenotype-relevant
+            # variants surface to the top in the workbench's default view.
             if real_mode and variants and hpo_ids:
                 emit(f"HPO: ensuring genes_to_phenotype catalog is loaded ({len(hpo_ids)} case HPO terms)")
                 hpo_ok = await hpo_genes.ensure_loaded()
                 if hpo_ok:
+                    # Ontology powers the graded (resnik/phrank) arms; coverage
+                    # works without it. Degrade silently if the obo won't load.
+                    emit("HPO: loading hp.obo ontology for proximity scoring")
+                    onto_ok = await hpo_ontology.ensure_loaded()
+                    if not onto_ok:
+                        emit("HPO: ontology unavailable — coverage-only scoring")
+                    hpo_labels = {hid: lbl for hid, lbl, _ in hpo_entries if lbl}
+                    scorer = PhenotypeScorer(hpo_ids, labels=hpo_labels)
                     hpo_hits = 0
                     for v in variants:
-                        m = hpo_genes.match_gene(v.gene, hpo_ids)
-                        if m:
-                            v.hpo_matches = m
-                            # Boost priority — each match adds 0.1, capped at +0.5 so
-                            # ACMG tier + reclass still dominate the overall score.
-                            v.priority_score = (v.priority_score or 0) + min(0.5, 0.1 * len(m))
-                            hpo_hits += 1
-                    emit(f"HPO: {hpo_hits} variants matched at least one case phenotype")
+                        rel = scorer.score(v.gene)
+                        if rel is None:
+                            continue
+                        v.phenotype_relevance = rel
+                        # hpo_matches kept for back-compat (exact coverage hits).
+                        v.hpo_matches = [c.hpo_id for c in rel.coverage.matched_terms]
+                        # Priority boost capped at +0.5 so ACMG tier + reclass
+                        # still dominate. Use the graded Phrank percent when the
+                        # ontology loaded, else exact-coverage percent.
+                        pct = (rel.phrank.percent if onto_ok else rel.coverage.percent)
+                        v.priority_score = (v.priority_score or 0) + 0.5 * (pct / 100.0)
+                        hpo_hits += 1
+                    emit(f"HPO: {hpo_hits} variants scored against case phenotype")
                 else:
-                    emit("HPO: catalog unavailable — skipping phenotype matching")
+                    emit("HPO: catalog unavailable — skipping phenotype scoring")
                 await post_status("running")
 
             # Gene-level lookup via mygene.info — OMIM gene id + NCBI Entrez

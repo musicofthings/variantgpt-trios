@@ -10,14 +10,13 @@ import { useNavigate, useParams } from "react-router-dom";
 import { useDemoCase } from "../caseData";
 import { api, apiFetch } from "../apiBase";
 import type { InheritanceModel, Tier, VariantRow } from "../types";
+import { DEFAULT_PHENO_ALGO, PhenotypeBar, phenoPercent } from "../phenotype";
+import { SELECTION_KEY } from "../selection";
 
-type SortKey = "gene" | "tier" | "consequence" | "af_global" | "af_sas" | "af_indi" | "priority" | "reclass" | null;
+type SortKey = "gene" | "tier" | "consequence" | "af_global" | "af_sas" | "af_indi" | "priority" | "phenotype" | "reclass" | null;
 type SortDir = "asc" | "desc";
 
 const TIER_RANK: Record<Tier, number> = { P: 0, LP: 1, VUS: 2, LB: 3, B: 4 };
-
-/** Storage key for variant selection per case — survives reloads. */
-const SELECTION_KEY = (caseId: string) => `vgpt:selection:${caseId}`;
 
 const TABS: { label: string; match: (v: VariantRow) => boolean }[] = [
   { label: "All",              match: () => true },
@@ -208,6 +207,10 @@ export function Workbench() {
     [variants],
   );
 
+  // Whether the case has HPO terms at all — gates the phenotype-relevance
+  // column + the "Curate in Analysis" hand-off (which is phenotype-driven).
+  const hasHpo = (data?.hpo?.length ?? 0) > 0;
+
   const filtered = useMemo(
     () => variants.filter((v) => {
       if (!tabSpec.match(v)) return false;
@@ -233,6 +236,7 @@ export function Workbench() {
         case "af_sas": return v.af_sas ?? -1;
         case "af_indi": return v.af_indi ?? -1;
         case "priority": return v.priority_score ?? 0;
+        case "phenotype": return phenoPercent(v, DEFAULT_PHENO_ALGO);
         case "reclass": return v.reclass ? (v.reclass.delta ?? 0) : 0;
         default: return 0;
       }
@@ -305,18 +309,31 @@ export function Workbench() {
             Compare with Franklin
           </button>
         ) : null}
-        <button
-          className="primary"
-          disabled={selectedForReport.size === 0}
-          title={selectedForReport.size === 0 ? "Select variants (checkboxes) to include in the report" : ""}
-          onClick={() => {
-            if (!caseId) return;
-            const ids = [...selectedForReport].join(",");
-            navigate(`/cases/${caseId}/report?variants=${encodeURIComponent(ids)}`);
-          }}
-        >
-          Generate report{selectedForReport.size > 0 ? ` (${selectedForReport.size})` : ""}
-        </button>
+        {hasHpo ? (
+          <button
+            className="primary"
+            disabled={selectedForReport.size === 0}
+            title={selectedForReport.size === 0
+              ? "Select candidate variants (checkboxes) to carry into the Analysis Workbench"
+              : "Curate the shortlist with phenotype-relevance ranking before finalizing the report"}
+            onClick={() => { if (caseId) navigate(`/cases/${caseId}/analysis`); }}
+          >
+            Curate in Analysis{selectedForReport.size > 0 ? ` (${selectedForReport.size})` : ""} →
+          </button>
+        ) : (
+          <button
+            className="primary"
+            disabled={selectedForReport.size === 0}
+            title={selectedForReport.size === 0 ? "Select variants (checkboxes) to include in the report" : ""}
+            onClick={() => {
+              if (!caseId) return;
+              const ids = [...selectedForReport].join(",");
+              navigate(`/cases/${caseId}/report?variants=${encodeURIComponent(ids)}`);
+            }}
+          >
+            Generate report{selectedForReport.size > 0 ? ` (${selectedForReport.size})` : ""}
+          </button>
+        )}
       </div>
 
       {/* ClinVar audit — concordance check against ClinVar's ≥2★
@@ -523,6 +540,11 @@ export function Workbench() {
                 <SortHeader label={<abbr title="Allele frequency in IndiGenomes (IGIB, 1,029 Indian whole genomes) — primary signal for South Asian reclassification">AF Indi</abbr>}
                   sortKey="af_indi" active={sortKey} dir={sortDir} onSort={toggleSort} numeric className="col-af col-af-indi" />
                 <SortHeader label="Tier" sortKey="tier" active={sortKey} dir={sortDir} onSort={toggleSort} className="col-tier" />
+                {hasHpo ? (
+                  <SortHeader
+                    label={<abbr title="Phenotype relevance — closeness of this gene to the case's HPO terms (Phrank). Switch algorithms in Analysis.">Phenotype</abbr>}
+                    sortKey="phenotype" active={sortKey} dir={sortDir} onSort={toggleSort} numeric className="col-pheno" />
+                ) : null}
                 <SortHeader label={<abbr title="Δ — points change after South Asian reclassification (negative = more benign)">Δ</abbr>}
                   sortKey="reclass" active={sortKey} dir={sortDir} onSort={toggleSort} className="col-delta" />
               </tr>
@@ -560,13 +582,19 @@ export function Workbench() {
                     <td className="num col-af col-af-sas" onClick={() => setSelectedId(v.id)} title={`gnomAD SAS: ${v.af_sas ?? "—"}`}>{fmt(v.af_sas)}</td>
                     <td className="num col-af col-af-indi" onClick={() => setSelectedId(v.id)} title={`IndiGenomes: ${v.af_indi ?? "—"}`}>{fmt(v.af_indi)}</td>
                     <td className="col-tier" onClick={() => setSelectedId(v.id)}><TierChip tier={v.baseline_tier} /></td>
+                    {hasHpo ? (
+                      <td className="num col-pheno" onClick={() => setSelectedId(v.id)}
+                        title={`Phenotype relevance (Phrank): ${phenoPercent(v, DEFAULT_PHENO_ALGO) < 0 ? "no gene-phenotype association" : phenoPercent(v, DEFAULT_PHENO_ALGO).toFixed(0) + "%"}`}>
+                        <PhenotypeBar percent={v.phenotype_relevance ? phenoPercent(v, DEFAULT_PHENO_ALGO) : null} />
+                      </td>
+                    ) : null}
                     <td className="col-delta" onClick={() => setSelectedId(v.id)}>{v.reclass ? <ReclassBadge {...v.reclass} /> : null}</td>
                   </tr>
                 );
               })}
               {visible.length === 0 ? (
                 <tr>
-                  <td colSpan={11} style={{ textAlign: "center", color: "var(--ink-soft)", padding: 24 }}>
+                  <td colSpan={hasHpo ? 12 : 11} style={{ textAlign: "center", color: "var(--ink-soft)", padding: 24 }}>
                     No variants match the current filters.
                   </td>
                 </tr>

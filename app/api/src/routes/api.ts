@@ -290,7 +290,10 @@ async function _continueRun(
     //              mutation_taster / lrt / fathmm / provean / metasvm /
     //              metalr / vest4) and case-level gene_info. Bump invalidates
     //              v6 caches so dbNSFP gets re-projected with the new fields.
-    variants: await signCacheStage("variants_v7"),
+    // variants_v8: per-variant phenotype_relevance (coverage / resnik / phrank
+    //              HPO proximity scores). Bump invalidates v7 so variants are
+    //              re-scored against the case's HPO terms via the hp.obo DAG.
+    variants: await signCacheStage("variants_v8"),
   };
 
   // (No reference tracks signed currently. IndiGenomes lookup pivoted to

@@ -99,6 +99,28 @@ export interface ClinVarRecord {
 
 export type Zygosity = "hom_ref" | "het" | "hom_alt" | "missing";
 
+/** The three interchangeable phenotype-ranking algorithms. */
+export type PhenotypeAlgorithm = "coverage" | "resnik" | "phrank";
+
+export interface PhenotypeTermContribution {
+  hpo_id: string;
+  label?: string;
+  contribution: number;           // 0..1; contributions sum to percent/100
+}
+
+export interface PhenotypeScore {
+  percent: number;                // 0..100 — closeness to the case's full phenotype
+  matched_terms: PhenotypeTermContribution[];
+}
+
+/** Per-variant phenotype relevance under all three ranking algorithms,
+ *  precomputed in the engine against the case's HPO terms. */
+export interface PhenotypeRelevance {
+  coverage: PhenotypeScore;
+  resnik: PhenotypeScore;
+  phrank: PhenotypeScore;
+}
+
 export interface MemberCall {
   member_id: string;
   role: string;
@@ -123,6 +145,7 @@ export interface VariantRow {
   genomic_hgvs?: string;          // "chr5:g.14363831C>T"
   omim_id?: string;               // OMIM gene * number
   hpo_matches?: string[];         // case HPO ids whose gene-association includes this variant's gene
+  phenotype_relevance?: PhenotypeRelevance | null;  // graded HPO proximity under 3 algorithms
   inheritance_models: InheritanceModel[];
   inheritance_confidence?: "high" | "medium" | "low";
   calls?: MemberCall[];

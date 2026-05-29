@@ -210,6 +210,19 @@ The `VITE_API_BASE` is hardcoded in the workflow file itself.
 
 ## Session log
 
+### 2026-05-29 (later) — HPO phenotype-proximity ranking + Analysis Workbench
+
+Graded phenotype relevance, replacing the old boolean gene↔HPO match.
+
+- **Engine — ontology + IC** ([annotation_sources/hpo_ontology.py](engine/src/variantgpt_engine/annotation_sources/hpo_ontology.py)): lazy-loads `hp.obo` (~10 MB, cached `/tmp/variantgpt/hp.obo`), builds the is_a DAG + memoized ancestor closure, and derives per-term Information Content from `genes_to_phenotype` annotation propagation. Exposes Resnik-MICA, best-match-average, and Phrank scorers. Degrades to 0.0 (never raises) when the obo can't load.
+- **Engine — scorer** ([phenotype.py](engine/src/variantgpt_engine/phenotype.py)): `PhenotypeScorer(case_hpo_ids)` precomputes per-algorithm perfect-match denominators, then `.score(gene)` returns a `PhenotypeRelevance` = `{coverage, resnik, phrank}`, each a normalized 0–100 % + per-term contribution breakdown (contributions sum to percent/100). **All three algorithms precomputed and baked into case.json** so the UI switches algorithm as a pure display toggle.
+- **Engine — models** ([models.py](engine/src/variantgpt_engine/models.py)): `PhenotypeRelevance` / `PhenotypeScore` / `PhenotypeTermContribution`; `Variant.phenotype_relevance`. `hpo_matches` retained (= exact-coverage hits) for back-compat.
+- **Engine — pipeline** ([container_server.py](tracks/container_server.py)): boolean HPO block replaced with full 3-algorithm scoring; `priority_score` boost now `+0.5 × phrank%` (coverage% when ontology unavailable). Cache key **`variants_v7 → v8`** ([api.ts](app/api/src/routes/api.ts)).
+- **Demo** ([build_demo_case.py](tracks/build_demo_case.py)): now phenotype-scores the demo on rebuild. Real result: G6PD scores 0 % coverage but **59 % Resnik / 40 % Phrank** (G6PD deficiency → hemolytic anemia is ontologically close to HP:0001903 even without an exact term), while unrelated GJB2/AGRN sit ~1 %. The graded-proximity payoff, visible in the demo.
+- **Frontend** — sortable **Phenotype %** column on the Workbench (default Phrank, shown when the case has HPO terms); new **Analysis Workbench** (`/cases/:caseId/analysis`, [pages/AnalysisWorkbench.tsx](app/web/src/pages/AnalysisWorkbench.tsx)) — the intermediate curation screen between triage and report: algorithm selector (coverage/resnik/phrank) that re-sorts live, per-variant HPO-term contribution breakdown, final report-selection checkboxes. Workbench's primary CTA becomes **Curate in Analysis →** (phenotype cases). Shortlist hand-off persisted per-case in localStorage ([selection.ts](app/web/src/selection.ts): `SELECTION_KEY` → `FINAL_KEY`). Shared scoring helpers + relevance bar in [phenotype.tsx](app/web/src/phenotype.tsx).
+- **Tests**: [tests/test_phenotype.py](engine/tests/test_phenotype.py) — 8 tests on a synthetic DAG (exact/sibling/partial/root-only/unannotated, contribution-sum invariant, ontology-absent fallback). Full engine suite green (24 passed); web typecheck + build clean; verified in browser preview.
+- This realizes the [prioritize.py](engine/src/variantgpt_engine/prioritize.py) §4.7 "Resnik/Phrank/Lin" stub that was previously unwired.
+
 ### 2026-05-29 — Validation suite + GenomeAsia scaffold + AI synopsis
 
 - **Validation A**: `<ClinvarAudit>` panel on Workbench. Auto-renders for any case with ≥2★ ClinVar-classified variants. Buckets: CONCORDANT, RECLASS_AGREE, WEAK_DISCORD, MISSED_PATH, OVERCALLED. Concordance rate colored green ≥85% / rust below. Per-row likely-cause hints (no fired pathogenic criteria → missing ACMG criterion; etc.). Click any row → drawer opens for evidence inspection.

@@ -144,6 +144,37 @@ class PredictorScores(BaseModel):
     vest4: Optional[float] = None
 
 
+class PhenotypeTermContribution(BaseModel):
+    """One case HPO term's contribution to a variant's phenotype-relevance
+    score under a given algorithm. `contribution` is that term's share of the
+    achieved fraction (0..1); contributions across terms sum to percent/100."""
+    hpo_id: str
+    label: Optional[str] = None
+    contribution: float = 0.0  # 0..1
+
+
+class PhenotypeScore(BaseModel):
+    """A single algorithm's phenotype-relevance verdict for a variant."""
+    percent: float = 0.0  # 0..100 — closeness to the case's full phenotype
+    matched_terms: list[PhenotypeTermContribution] = Field(default_factory=list)
+
+
+class PhenotypeRelevance(BaseModel):
+    """Per-variant phenotype relevance under all three ranking algorithms.
+    Precomputed in the engine against the case's HPO terms so the Analysis
+    Workbench can switch algorithms instantly (display toggle, no recompute).
+
+      - coverage: fraction of case HPO terms the gene is directly associated
+                  with (exact genes_to_phenotype match). No ontology needed.
+      - resnik:   Resnik best-match-average over the HPO is_a DAG — a gene
+                  linked to a parent/child of a case term earns partial credit.
+      - phrank:   sum of information content over shared ancestor closure.
+    """
+    coverage: PhenotypeScore = Field(default_factory=PhenotypeScore)
+    resnik: PhenotypeScore = Field(default_factory=PhenotypeScore)
+    phrank: PhenotypeScore = Field(default_factory=PhenotypeScore)
+
+
 CriterionStrength = Literal["VS", "S", "M", "P", "BS", "BP", "BA"]
 
 
@@ -207,6 +238,7 @@ class Variant(BaseModel):
     genomic_hgvs: Optional[str] = None                 # e.g. "chr5:g.14363831C>T"
     omim_id: Optional[str] = None                      # OMIM gene id (the * number)
     hpo_matches: list[str] = Field(default_factory=list)  # case HPO ids whose gene-association includes this variant's gene
+    phenotype_relevance: Optional[PhenotypeRelevance] = None  # graded proximity under coverage/resnik/phrank
     inheritance_models: list[InheritanceModel] = Field(default_factory=list)
     inheritance_confidence: Literal["high", "medium", "low"] = "medium"
     calls: list[MemberCall] = Field(default_factory=list)

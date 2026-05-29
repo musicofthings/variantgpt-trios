@@ -8,6 +8,7 @@ Writes:
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 from pathlib import Path
@@ -15,8 +16,37 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "engine" / "src"))
 
+from variantgpt_engine.annotation_sources import hpo_genes, hpo_ontology  # noqa: E402
 from variantgpt_engine.pedigree import load_ped  # noqa: E402
+from variantgpt_engine.phenotype import PhenotypeScorer  # noqa: E402
 from variantgpt_engine.pipeline import run_case  # noqa: E402
+
+
+async def _score_phenotype(emission) -> int:
+    """Attach phenotype-relevance to the demo variants. Mirrors what the
+    container pipeline does for real cases; downloads the HPO catalogs if
+    they aren't cached. Returns the number of scored variants (0 when the
+    catalogs are unavailable offline)."""
+    if not await hpo_genes.ensure_loaded():
+        print("  HPO genes_to_phenotype unavailable — demo will have no relevance scores")
+        return 0
+    onto_ok = await hpo_ontology.ensure_loaded()
+    if not onto_ok:
+        print("  hp.obo unavailable — demo relevance limited to coverage")
+    labels = {h.hpo_id: h.label for h in emission.hpo if h.label}
+    scorer = PhenotypeScorer([h.hpo_id for h in emission.hpo], labels=labels)
+    n = 0
+    for v in emission.variants:
+        rel = scorer.score(v.gene)
+        if rel is None:
+            continue
+        v.phenotype_relevance = rel
+        v.hpo_matches = [c.hpo_id for c in rel.coverage.matched_terms]
+        v.priority_score = (v.priority_score or 0) + 0.5 * (
+            (rel.phrank.percent if onto_ok else rel.coverage.percent) / 100.0
+        )
+        n += 1
+    return n
 
 TRIO = ROOT / "data" / "test" / "demo_trio"
 WEB_PUBLIC = ROOT / "app" / "web" / "public" / "demo"
@@ -57,6 +87,9 @@ def main() -> None:
         build="GRCh38",
         use_demo_annotations=True,
     )
+
+    scored = asyncio.run(_score_phenotype(emission))
+    print(f"  phenotype-scored {scored} variants against {len(hpo)} HPO terms")
 
     out_engine = TRIO / "case.json"
     out_engine.write_text(emission.model_dump_json(indent=2), encoding="utf-8")
