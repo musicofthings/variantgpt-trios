@@ -7,6 +7,7 @@ import { casesRouter } from "./routes/cases";
 import { variantsRouter } from "./routes/variants";
 import { proposalsRouter } from "./routes/proposals";
 import { apiRouter } from "./routes/api";
+import { aiRouter } from "./routes/ai";
 
 const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
@@ -29,6 +30,9 @@ app.get("/health", (c) => c.json({ ok: true }));
 
 // /api/* — surface the SPA expects (matches the Vite dev middleware contract).
 app.route("/api", apiRouter);
+// /api/ai/* — AI-drafted synopsis & narrative endpoints. Mounted as a
+// sibling under /api so it shares the Clerk auth gate.
+app.route("/api/ai", aiRouter);
 
 // /cases, /variants, /proposals — richer RESTful surface for future curator UI.
 app.route("/cases", casesRouter);

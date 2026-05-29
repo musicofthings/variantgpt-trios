@@ -16,6 +16,11 @@ export type Bindings = {
   OPENROUTER_API_KEY: string;
   OPENROUTER_MODEL_NARRATIVE: string;
   OPENROUTER_MODEL_HPO: string;
+  /** Direct Anthropic API key — preferred over OpenRouter for the AI
+   *  synopsis path (single round-trip, no OpenRouter markup). Optional;
+   *  when unset the synopsis endpoint returns 503. */
+  ANTHROPIC_API_KEY?: string;
+  ANTHROPIC_MODEL_SYNOPSIS?: string;  // default: claude-3-5-haiku-latest
 
   /** Clerk JWT validation.
    *  - CLERK_ISSUER: e.g. "https://your-app.clerk.accounts.dev" (Clerk dashboard

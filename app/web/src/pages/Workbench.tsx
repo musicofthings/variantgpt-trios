@@ -558,14 +558,32 @@ export function Workbench() {
             overlay on screens narrower than 900px (handled by the
             .variant-drawer media query in global.css). */}
         {selected ? (
-          <Drawer variant={selected} onClose={() => setSelectedId(null)} />
+          <Drawer
+            variant={selected}
+            caseId={caseId}
+            hpoTerms={data?.hpo ?? []}
+            clinicalHistory={data?.clinical_history ?? null}
+            geneInfo={data?.gene_info ?? {}}
+            probandMember={data?.proband_member ?? null}
+            onClose={() => setSelectedId(null)}
+          />
         ) : null}
       </div>
     </>
   );
 }
 
-function Drawer({ variant, onClose }: { variant: VariantRow; onClose: () => void }) {
+function Drawer({
+  variant, caseId, hpoTerms, clinicalHistory, geneInfo, probandMember, onClose,
+}: {
+  variant: VariantRow;
+  caseId?: string;
+  hpoTerms: import("../caseData").HPOTermRow[];
+  clinicalHistory: import("../caseData").ClinicalHistory | null;
+  geneInfo: Record<string, import("../caseData").GeneInfoRow>;
+  probandMember: { id: string; sex: string; affected: string; sample_name?: string } | null;
+  onClose: () => void;
+}) {
   return (
     <aside className="card variant-drawer">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", gap: 12 }}>
@@ -650,26 +668,148 @@ function Drawer({ variant, onClose }: { variant: VariantRow; onClose: () => void
       </Section>
 
       <Section title="AI synopsis">
-        <div
-          style={{
-            fontSize: 11, color: "var(--accent)", letterSpacing: "0.06em",
-            textTransform: "uppercase", marginBottom: 6,
-          }}
-        >
-          AI-drafted · review before signing
-        </div>
-        <p style={{ fontSize: 13, lineHeight: 1.6 }}>
-          {variant.reclass
-            ? `${variant.gene} ${variant.hgvs_p ?? variant.hgvs_c}: present at ` +
-              `AF ${variant.af_sas} in gnomAD-SAS and ${variant.af_indi} in IndiGenomes, ` +
-              `well above the BS1 threshold (0.01). PM2 is retracted and BS1 fires; ` +
-              `point sum shifts from VUS to Likely Benign.`
-            : `${variant.gene} ${variant.hgvs_p ?? variant.hgvs_c}: predicted loss-of-function ` +
-              `confirmed de novo in the proband. PVS1 (Strong) + PS2 (Strong) + PM2 + PP3 yield ` +
-              `${variant.baseline_tier}.`}
-        </p>
+        <AiSynopsis
+          variant={variant}
+          caseId={caseId}
+          hpoTerms={hpoTerms}
+          clinicalHistory={clinicalHistory}
+          geneInfo={geneInfo[variant.gene ?? ""] ?? null}
+          probandMember={probandMember}
+        />
       </Section>
     </aside>
+  );
+}
+
+/** AI-drafted variant synopsis with a manual generate button.
+ *
+ *  We deliberately do NOT auto-generate on drawer open — every click costs
+ *  an Anthropic API call, and the curator should be the one choosing when
+ *  to spend it. Results are cached in localStorage per (caseId, variantId)
+ *  so re-opening the drawer recalls the cached text instead of re-prompting.
+ */
+function AiSynopsis({
+  variant, caseId, hpoTerms, clinicalHistory, geneInfo, probandMember,
+}: {
+  variant: VariantRow;
+  caseId?: string;
+  hpoTerms: import("../caseData").HPOTermRow[];
+  clinicalHistory: import("../caseData").ClinicalHistory | null;
+  geneInfo: import("../caseData").GeneInfoRow | null;
+  probandMember: { id: string; sex: string; affected: string; sample_name?: string } | null;
+}) {
+  const cacheKey = caseId ? `vgpt:ai-synopsis:${caseId}:${variant.id}` : "";
+  const [synopsis, setSynopsis] = useState<string | null>(() => {
+    if (!cacheKey) return null;
+    try { return localStorage.getItem(cacheKey); } catch { return null; }
+  });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function generate() {
+    setBusy(true); setErr(null);
+    try {
+      const resp = await apiFetch(api("/ai/synopsis"), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          variant: {
+            id: variant.id,
+            gene: variant.gene,
+            hgvs_c: variant.hgvs_c,
+            hgvs_p: variant.hgvs_p,
+            transcript: variant.transcript,
+            consequence: variant.consequence,
+            exon: variant.exon,
+            inheritance_models: variant.inheritance_models,
+            inheritance_confidence: variant.inheritance_confidence,
+            baseline_tier: variant.baseline_tier,
+            reclass: variant.reclass,
+            af_global: variant.af_global,
+            af_sas: variant.af_sas,
+            af_indi: variant.af_indi,
+            hpo_matches: variant.hpo_matches,
+            clinvar: variant.clinvar,
+            evidence: variant.evidence,
+            predictors: variant.predictors,
+          },
+          case_context: {
+            proband: probandMember,
+            hpo: hpoTerms,
+            clinical_history: clinicalHistory,
+            gene_info: geneInfo,
+          },
+        }),
+      });
+      const j = await resp.json() as { synopsis?: string; error?: string; model?: string };
+      if (!resp.ok || !j.synopsis) {
+        throw new Error(j.error ?? `synopsis failed (${resp.status})`);
+      }
+      setSynopsis(j.synopsis);
+      if (cacheKey) {
+        try { localStorage.setItem(cacheKey, j.synopsis); } catch { /* quota / private mode */ }
+      }
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function clearCache() {
+    setSynopsis(null); setErr(null);
+    if (cacheKey) {
+      try { localStorage.removeItem(cacheKey); } catch { /* ignore */ }
+    }
+  }
+
+  return (
+    <>
+      <div
+        style={{
+          fontSize: 11, color: "var(--accent)", letterSpacing: "0.06em",
+          textTransform: "uppercase", marginBottom: 6,
+        }}
+      >
+        AI-drafted · review before signing
+      </div>
+
+      {synopsis ? (
+        <>
+          <p style={{ fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{synopsis}</p>
+          <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
+            <button onClick={generate} disabled={busy} title="Regenerate from latest evidence — overwrites the cached draft">
+              {busy ? "Regenerating…" : "Regenerate"}
+            </button>
+            <button onClick={clearCache} disabled={busy} title="Clear the cached draft for this variant">
+              Clear
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <p style={{ fontSize: 12, color: "var(--ink-soft)", lineHeight: 1.5 }}>
+            Generates a 2–3 paragraph clinical synopsis from this variant's evidence and the
+            case's phenotype context. AI-drafted; the curator must review before any signed
+            report.
+          </p>
+          <button
+            className="primary"
+            onClick={generate}
+            disabled={busy}
+            style={{ marginTop: 6 }}
+          >
+            {busy ? "Drafting…" : "Generate synopsis"}
+          </button>
+        </>
+      )}
+
+      {err ? (
+        <p style={{ marginTop: 8, fontSize: 12, color: "var(--rust, #b04a2a)" }}>
+          {err}
+        </p>
+      ) : null}
+    </>
   );
 }
 
