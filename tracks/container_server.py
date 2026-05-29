@@ -54,7 +54,7 @@ sys.path.insert(0, str(THIS.parents[1] / "engine" / "src"))
 from variantgpt_engine.pedigree import load_ped  # noqa: E402
 from variantgpt_engine.acmg import classify  # noqa: E402
 from variantgpt_engine.annotation import AnnotationContext, annotate  # noqa: E402
-from variantgpt_engine.annotation_sources import hpo_genes, indigenomes, mygene, myvariant, vep_rest  # noqa: E402
+from variantgpt_engine.annotation_sources import genomeasia, hpo_genes, indigenomes, mygene, myvariant, vep_rest  # noqa: E402
 from variantgpt_engine.annotation_sources.csq import pick_canonical  # noqa: E402
 from variantgpt_engine import cache  # noqa: E402
 from variantgpt_engine.build_detect import detect_build  # noqa: E402
@@ -141,6 +141,10 @@ async def _execute_job(job: dict[str, Any]) -> None:
     track_urls: dict[str, str] = job.get("track_urls", {})  # signed GET URLs for reference tracks
     indigen_proxy_url: Optional[str] = job.get("indigen_proxy_url")
     indigen_proxy_bearer: Optional[str] = job.get("indigen_proxy_bearer")
+    # GenomeAsia AF URL template (see annotation_sources/genomeasia.py).
+    # Worker mints this when GENOMEASIA_R2_PREFIX env var is set; when
+    # unset, adapter is a silent no-op.
+    genomeasia_af_url_template: Optional[str] = job.get("genomeasia_af_url_template")
     callback_url: str = job["callback_url"]
     secret: str = job["callback_secret"]
 
@@ -635,6 +639,23 @@ async def _execute_job(job: dict[str, Any]) -> None:
                             emit(f"  IndiGen debug: {line}")
                 except Exception as e:  # noqa: BLE001
                     emit(f"IndiGen: lookup failed (continuing without): {type(e).__name__}: {e}")
+                await post_status("running")
+
+            # GenomeAsia 100K AF — only fires when the Worker injected a
+            # signed-URL template into the job payload (which it does
+            # only when GENOMEASIA_R2_PREFIX env var is set on the
+            # Worker). Otherwise the adapter no-ops silently — same
+            # pattern as IndiGen pre-proxy.
+            if real_mode and variants and genomeasia_af_url_template:
+                emit("GenomeAsia: looking up allele frequencies from R2 tracks")
+                try:
+                    ga_hits = await genomeasia.fetch_for_variants(
+                        variants,
+                        af_url_template=genomeasia_af_url_template,
+                    )
+                    emit(f"GenomeAsia: {ga_hits} variants annotated")
+                except Exception as e:  # noqa: BLE001
+                    emit(f"GenomeAsia: lookup failed (continuing without): {type(e).__name__}: {e}")
                 await post_status("running")
 
             # HPO phenotype matching — for each variant, see if its gene is

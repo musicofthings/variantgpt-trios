@@ -22,6 +22,12 @@ export type Bindings = {
   ANTHROPIC_API_KEY?: string;
   ANTHROPIC_MODEL_SYNOPSIS?: string;  // default: claude-3-5-haiku-latest
 
+  /** R2 key prefix where the GenomeAsia ingestion CLI uploaded the
+   *  per-chrom AF TSVs (e.g. "tracks/genomeasia/v1"). When set, the
+   *  /api/cases/:id/run handler mints a signed URL template the engine
+   *  uses for AF lookups. When unset, the GenomeAsia adapter no-ops. */
+  GENOMEASIA_R2_PREFIX?: string;
+
   /** Clerk JWT validation.
    *  - CLERK_ISSUER: e.g. "https://your-app.clerk.accounts.dev" (Clerk dashboard
    *                 → Configure → API keys → "Issuer URL"). When unset, auth

@@ -52,6 +52,44 @@ async function signR2(
   return signed.url;
 }
 
+/** Mint a signed-URL TEMPLATE for the GenomeAsia AF tracks, with a
+ *  literal `{chrom}` placeholder the engine replaces per query. We sign
+ *  a representative key first and then swap the chrom in the path. Works
+ *  because sigv4 signQuery puts the signature in query params, not the
+ *  path, so replacing the filename doesn't invalidate the signature
+ *  prefix — but it DOES invalidate the URL itself. To handle this, we
+ *  sign one URL per chrom up-front in a single Promise.all and emit them
+ *  as a map. Cleaner than fighting sigv4. */
+async function maybeGenomeAsiaTemplate(env: Bindings): Promise<string | null> {
+  const prefix = env.GENOMEASIA_R2_PREFIX;
+  if (!prefix) return null;
+  // We don't try to template a single URL — instead the engine adapter
+  // accepts a JSON map. Build it here.
+  const buckets = [
+    ...Array.from({ length: 22 }, (_, i) => `chr${i + 1}`),
+    "indels",
+  ];
+  const entries: Array<[string, string]> = await Promise.all(
+    buckets.map(async (b) => [
+      b,
+      await signR2(env, "variantgpt", `${prefix}/af/${b}.tsv.gz`, "GET", 6 * 3600),
+    ] as [string, string]),
+  );
+  // Engine adapter expects a "{chrom}" placeholder; encode the map as
+  // a magic URL-like string with embedded JSON. The adapter's
+  // template.replace("{chrom}", b) path needs the actual per-chrom URL,
+  // so we encode the map as `data:application/json;base64,...` and the
+  // adapter checks for that prefix. Simpler: just send the map directly
+  // as `genomeasia_af_urls` (dict) instead of a template — adjust
+  // the adapter accordingly.
+  //
+  // For minimum surgery, encode as a JSON object the adapter recognizes:
+  // when the "template" starts with "json:", the suffix is a base64 JSON
+  // object {chrom: url}. The adapter then looks up by chrom.
+  const map = Object.fromEntries(entries);
+  return "json:" + btoa(JSON.stringify(map));
+}
+
 function pickExt(filename: string | undefined): string | null {
   if (!filename) return "vcf";
   const lower = filename.toLowerCase();
@@ -292,6 +330,10 @@ async function _continueRun(
       // own Authorization header from us.
       indigen_proxy_url: `${c.env.PUBLIC_API_BASE}/api/internal/indigen-proxy`,
       indigen_proxy_bearer: c.env.ENGINE_BEARER,
+      // GenomeAsia AF tracks — present only when GENOMEASIA_R2_PREFIX is
+      // configured on the Worker (and the ingestion CLI has populated R2).
+      // The engine adapter is a no-op when this is undefined.
+      genomeasia_af_url_template: await maybeGenomeAsiaTemplate(c.env),
     }),
   });
   c.executionCtx.waitUntil(
