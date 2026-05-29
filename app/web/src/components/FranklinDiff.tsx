@@ -275,6 +275,36 @@ export function FranklinDiff({ variants }: { variants: VariantRow[] }) {
 
       {franklin && diff.length > 0 ? (
         <>
+          {/* Calibration caveat — Franklin pulls from GenomeAsia 100K in
+              their internal annotation pipeline (per Genoox product
+              communications, not documented in their public PM2/BS1
+              article). When we don't have GenomeAsia loaded, a chunk of
+              divergences in BOTH_DIFFER / FRANKLIN_ONLY are
+              GA100K-driven and will close on our side once
+              GENOMEASIA_R2_PREFIX is set — see GenomeAsia_config.md.
+              This banner prevents the curator from over-reading those
+              divergences as our pipeline being wrong. */}
+          <div
+            style={{
+              marginTop: 12,
+              padding: "8px 12px",
+              fontSize: 11,
+              color: "var(--ink-soft)",
+              border: "1px solid var(--rule)",
+              background: "var(--paper-soft, #f6f1e6)",
+              borderRadius: 4,
+              lineHeight: 1.5,
+            }}
+          >
+            <strong>Calibration note:</strong> Franklin uses GenomeAsia 100K
+            internally for South-Asian variant classification. If
+            VariantGPT's GenomeAsia track isn't loaded yet (see{" "}
+            <code className="mono">GenomeAsia_config.md</code>), expect some
+            divergences in <em>Franklin only</em> / <em>both differ</em>
+            to close automatically once it's activated — they reflect a
+            missing data source, not an ACMG implementation gap.
+          </div>
+
           <div style={{ display: "flex", gap: 6, marginTop: 12, flexWrap: "wrap", fontSize: 12 }}>
             {(["ALL", "BOTH_DIFFER", "FRANKLIN_ONLY", "VARIANTGPT_ONLY", "BOTH_AGREE"] as const).map((b) => {
               const n = b === "ALL" ? diff.length : counts[b];
