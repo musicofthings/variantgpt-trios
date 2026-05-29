@@ -5,6 +5,7 @@ import { EvidenceLedger } from "../components/EvidenceLedger";
 import { PopulationFreqPanel } from "../components/PopulationFreqPanel";
 import { PredictorGauges } from "../components/PredictorGauges";
 import { RunMonitor, useJobStatus } from "../components/RunMonitor";
+import { ClinvarAudit } from "../components/ClinvarAudit";
 import { useNavigate, useParams } from "react-router-dom";
 import { useDemoCase } from "../caseData";
 import { api, apiFetch } from "../apiBase";
@@ -309,6 +310,18 @@ export function Workbench() {
           Generate report{selectedForReport.size > 0 ? ` (${selectedForReport.size})` : ""}
         </button>
       </div>
+
+      {/* ClinVar audit — concordance check against ClinVar's ≥2★
+          classifications. Hides itself when no audit-eligible variants
+          exist. First-line validation tool: tells the curator
+          immediately whether our tier calls line up with the
+          high-confidence ClinVar consensus, and groups discordances by
+          likely cause so divergences from Franklin / other platforms
+          have an objective reference. */}
+      <ClinvarAudit
+        variants={variants}
+        onSelectVariant={(id) => setSelectedId(id)}
+      />
 
       {/* Pipeline-capability banner — explicit for singleton/duo modes so
           curators see why some criteria are weaker than they'd be in a
