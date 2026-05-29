@@ -53,9 +53,9 @@ Orchestrated by [`tracks/container_server.py`](tracks/container_server.py). Stag
 3. **Proband-carrier filter** — drops sites where the proband isn't a carrier (~30× reduction).
 4. **Rare-variant filter** — gnomAD v4 AF < 1% via batched myvariant.info AF lookup (10-way concurrent).
 5. **VEP REST annotation** — payload flags `{hgvs, numbers, mane, canonical, protein, symbol, domains}`; concurrent batches; extracts HGVS c./p., MANE transcript, exon, consequence.
-6. **myvariant.info batch** — ClinVar (significance / review_stars / conditions / variation_id) + dbNSFP (AlphaMissense / REVEL / CADD / SpliceAI) + gnomAD AF.
+6. **myvariant.info batch** — ClinVar (significance / review_stars / conditions / variation_id) + **full dbNSFP predictor panel** (AlphaMissense / REVEL / CADD / SpliceAI / **SIFT / PolyPhen2 HVAR/HDIV / MutationTaster / LRT / FATHMM / PROVEAN / MetaSVM / MetaLR / VEST4** / phyloP / GERP) + gnomAD AF.
 7. **IndiGenomes live API** — IGIB `data.php` queried per gene via Cloudflare Worker proxy (`/api/internal/indigen-proxy`) since Fly IPs are blocked by IGIB. MAX_GENES_PER_CASE=400, priority-sorted, 15s per-batch timeout, ANNOVAR↔VCF allele representation conversion for indel matching.
-8. **mygene.info** — gene-level OMIM IDs.
+8. **mygene.info** — `fetch_gene_info_for_symbols` returns gene name + NCBI Entrez summary + type_of_gene + OMIM. Stored at case level (`CaseEmission.gene_info: dict[symbol → GeneInfo]`) so the report renders real gene-function prose per variant without duplicating across thousands of rows.
 9. **HPO matching** ([annotation_sources/hpo_genes.py](engine/src/variantgpt_engine/annotation_sources/hpo_genes.py)) — downloads HPO consortium `genes_to_phenotype.txt` (~20 MB, 329k mappings), matches each variant's gene against case HPO terms; sets `v.hpo_matches` and boosts `priority_score`.
 10. **ACMG classify** ([acmg/criteria.py](engine/src/variantgpt_engine/acmg/criteria.py)) — Tavtigian point system; criteria implemented: PVS1, PS1, PS2, PM1, PM2, PM4, PM5, PM6, PP3, BA1, BS1, BS2, BP4, BP7.
 11. **South-Asian reclassification** ([reclassify.py](engine/src/variantgpt_engine/reclassify.py)) — `SAS_SOURCES = ("indigenomes", "genomeasia", "genomeindia")`. gnomAD-SAS deliberately excluded (not representative of Indian population). PM2 retracted / BS1 fired on highest-AF Indian source.
@@ -69,17 +69,19 @@ Orchestrated by [`tracks/container_server.py`](tracks/container_server.py). Stag
 R2 stage caches keyed by versioned URLs:
 - `af_map` — myvariant.info AF lookup
 - `csq_v2` — VEP REST annotation
-- `variants_v6` — annotate + classify + HPO (current; bumped from v5 when `het_inherited` was added)
+- `variants_v7` — annotate + classify + HPO (current; bumped v6→v7 with expanded PredictorScores schema + case-level gene_info)
 
 A failed/OOM run resumes from the last completed chunk; only the bumped stage rebuilds.
 
-### Auth (scaffold)
+### Auth (fully enforced)
 
-`@clerk/clerk-react` integrated in [`app/web/src/auth.tsx`](app/web/src/auth.tsx):
-- `AuthGate` wraps `<App>`; when `VITE_CLERK_PUBLISHABLE_KEY` is set, signed-out users hit Clerk's hosted sign-in.
-- `UserChip` in sidebar (avatar + name + sign-out).
-- **Fallback:** if no Clerk key set, AuthGate is a pass-through with a "dev mode" badge so local dev / unauthenticated previews keep working.
-- **Not yet wired:** Worker-side JWT validation against Clerk JWKS. Right now the SPA gates the UI; anyone with the Worker URL can hit `/api/*` directly.
+`@clerk/clerk-react` integrated in [`app/web/src/auth.tsx`](app/web/src/auth.tsx) + JWT validation in [`app/api/src/auth.ts`](app/api/src/auth.ts):
+- `AuthGate` wraps `<App>`; when `VITE_CLERK_PUBLISHABLE_KEY` is set, signed-out users hit Clerk's hosted sign-in
+- `TokenBridge` (inside `<SignedIn>`) plumbs Clerk's `getToken()` into the global `apiFetch()` token provider
+- **Every** SPA call to `/api/*` uses `apiFetch()` which attaches `Authorization: Bearer <jwt>` automatically
+- Worker `clerkAuthGated` middleware verifies JWT against Clerk JWKS (`jose` lib, JWKS cached per-isolate); validates `iss` + optional `aud`, extracts `sub` as user id
+- `isPublicPath()` bypass for `/health`, `/`, and HMAC-signed internal webhooks (engine-callback, indigen-proxy)
+- **Dev-mode fallback**: when `CLERK_ISSUER` Worker secret OR `VITE_CLERK_PUBLISHABLE_KEY` GHA variable is unset, the corresponding end becomes a pass-through. Production has both set
 
 ---
 
@@ -140,13 +142,18 @@ fly.toml                                 shared-cpu-4x, 8192 MB, min_machines_ru
 
 ## Known gaps / road ahead
 
-1. **CI lint failures on `tests/test_preprocess.py`** (E702, E741) — pre-existing, unrelated to current features. Doesn't block `deploy` job which is on a separate workflow. Trivial fix when convenient.
-2. **GenomeAsia 100K integration** — task #35, deferred. IndiGen handles bulk of Indian-population coverage; GenomeAsia would round it out for non-Indian South-Asian ancestry. AF schema is already shape-compatible.
-3. **Clerk Worker-side JWT validation** — see auth scaffold above. Add `verifyToken` middleware on `/api/*` that hits Clerk JWKS once and caches.
-4. **Singleton/duo banner in Workbench** — engine already degrades de novo → PM6 → none based on QC; would be nice to surface "Singleton mode: PS2 unavailable; PM6 max Moderate" so curators don't wonder why a clear de novo isn't fired.
-5. **Path-filter CI** — task #31. Previous attempt failed (GHA silently rejected the workflow file). Engine + api + web jobs currently all run on every push; not blocking but noisy.
+1. **GenomeAsia 100K integration** — task #35, deferred. IndiGen handles bulk of Indian-population coverage; GenomeAsia would round it out for non-Indian South-Asian ancestry. AF schema is already shape-compatible.
+2. **Worker-side rate limiting on `/api/*`** — not wired. Cloudflare DDoS defaults apply, but no per-user limit.
+3. **LLM HPO extraction + AI synopsis drafting** — PRD §6.7 stub; needs AI Gateway → OpenRouter wiring.
+4. **Server-side PDF generation** — browser print already produces a clean clinical PDF; a `POST /api/cases/:id/report` endpoint that returns a server-rendered PDF would be a nice add for archival.
+5. **Compound-het PM3 trans-partner ClinVar lookup** — comp-het detection works; PM3 doesn't auto-fire because it needs trans-partner ClinVar classification.
 6. **CNV/SV/mitochondrial heteroplasmy** — out of scope per PRD §1.
-7. **bcftools / tabix / cyvcf2** — pure-Python engine intentionally avoids these so it runs on Fly without htslib. Real WGS multi-allelic VCFs work via the in-house preprocess.
+
+### Resolved this session (2026-05-28)
+- ✅ CI lint debt cleared (`ruff check src tests` clean)
+- ✅ Worker-side Clerk JWT validation (jose-based JWKS verify, isolate-cached)
+- ✅ Singleton/duo `<PipelineModeBanner>` listing explicit ACMG limitations per mode
+- ✅ Path-filter CI live (dorny/paths-filter; engine/api/web jobs skip when slice untouched)
 
 ---
 
@@ -166,22 +173,39 @@ cd app/web && npm run dev
 python tracks/build_demo_case.py
 ```
 
-### Required env vars (Cloudflare Pages)
+### Required env vars
 
-```
-VITE_API_BASE              https://variantgpt-api.shibi-kannan.workers.dev
-VITE_CLERK_PUBLISHABLE_KEY pk_test_...   (optional — leave unset for dev-mode pass-through)
-```
+**GitHub Actions Variables** (Settings → Secrets and variables → Actions → Variables) — bundled into the SPA at build time by Vite:
+- `VITE_CLERK_PUBLISHABLE_KEY` — `pk_test_…` / `pk_live_…`. Leave unset for dev-mode SPA pass-through.
 
-### Required Worker secrets
+(Note: Cloudflare Pages dashboard env vars do NOT reach our GHA build — those only apply to Pages-managed builds. We use `wrangler pages deploy` with a pre-built artifact, so the value must come from GHA Variables.)
 
-`R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `ENGINE_CALLBACK_SECRET`, `INDIGEN_PROXY_BEARER`, `FLY_ENGINE_URL`.
+The `VITE_API_BASE` is hardcoded in the workflow file itself.
+
+### Required Worker secrets (`wrangler secret put …`)
+
+`R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ACCOUNT_ID`, `ENGINE_BEARER`, `ENGINE_WEBHOOK_SECRET`, `INDIGEN_PROXY_BEARER`, `CLERK_ISSUER` (e.g. `https://apt-ant-91.clerk.accounts.dev`), optional `CLERK_AUDIENCE`, plus existing AI Gateway / OpenRouter keys.
 
 ---
 
 ## Session log
 
-### 2026-05-28 — Report polish + UX home/pipelines
+### 2026-05-28 (later) — Auth enforcement + report richness
+- **Worker-side Clerk JWT** validation (`auth.ts`, `jose` + JWKS); `clerkAuthGated` middleware on `*` with `isPublicPath()` bypass for HMAC webhooks + `/health`
+- SPA `apiFetch` wrapper attaches Clerk JWT to every `/api/*` call. Swept all call sites: HpoSearch, RunMonitor, Dashboard, Intake, Workbench, **caseData.loadCase**, **Intake upload-url presign**
+- **HPO definitions** plumbed Intake → manifest → case.json (`HPOTerm.definition`) → Report page 1 table + per-variant phenotype list
+- **Gene function via mygene.info** — `gene_info: dict[symbol → GeneInfo]` at case level; NCBI Entrez summary paragraph; replaces broken OMIM-only call (the old OR-Lucene query was silently returning `[{notfound: true}]` for every gene). Fixed to proper batch interface `q=A,B,C&scopes=symbol`
+- **Expanded predictors** — `PredictorScores` adds SIFT / PolyPhen2 HVAR / PolyPhen2 HDIV / MutationTaster / LRT / FATHMM / PROVEAN / MetaSVM / MetaLR / VEST4 (plus phyloP/GERP). Report `PredictorTable` renders each with Damaging/Tolerated call using native direction (SIFT low=damaging, etc.). Variants cache key v6→v7
+- **Singleton/duo workbench banner** with explicit ACMG limitations per mode
+- **Het inherited** inheritance model (proband het from unaffected parent — most rare hets land here)
+- **Path-filter CI** live via dorny/paths-filter; engine deploy skipped on SPA-only commits
+- **Engine lint debt cleared** — `ruff check src tests` clean
+- **Permissive sample-name matcher** in vcfSniff — synonyms (dad/papa/sire→father; mom/mama/dam→mother; child/patient/index→proband) + abbrevs (prob/fath/moth) + p1/f1/m1 markers + _P/_F/_M terminal suffixes + filename considered alongside VCF header sample
+- **R2 CORS** broadened to `*` (security boundary is the sigv4 presigned URL, not origin)
+- Auth fully active in prod: `CLERK_ISSUER` Worker secret + `VITE_CLERK_PUBLISHABLE_KEY` GHA Variable (publishable keys are public so they go in Variables not Secrets)
+- Bug fixes: Intake upload-url was still bare `fetch` (401'd); caseData.loadCase was still bare `fetch` (workbench wouldn't load after run); mygene batch interface
+
+### 2026-05-28 (earlier) — Report polish + UX home/pipelines
 - Report: dropped not-fired evidence rows; added gene paragraph + variant-with-phenotype paragraph + per-HPO-term context line; new **Patient details**, **Clinical history**, **HPO terms** sections on page 1.
 - Intake: added Consanguinity notes + Family history inputs; structured `clinical_history` block in manifest; HPO sent as `{id,label}` so labels survive the round-trip.
 - New `Home.tsx` page with Singleton/Duo/Trio picker; Dashboard moved to `/cases`.
