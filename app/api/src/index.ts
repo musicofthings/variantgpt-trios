@@ -8,6 +8,7 @@ import { variantsRouter } from "./routes/variants";
 import { proposalsRouter } from "./routes/proposals";
 import { apiRouter } from "./routes/api";
 import { aiRouter } from "./routes/ai";
+import { probeRouter } from "./routes/probe";
 
 const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
@@ -33,6 +34,10 @@ app.route("/api", apiRouter);
 // /api/ai/* — AI-drafted synopsis & narrative endpoints. Mounted as a
 // sibling under /api so it shares the Clerk auth gate.
 app.route("/api/ai", aiRouter);
+// /api/probe/* — TEMPORARY operator probe for verifying upstream
+// reachability from Cloudflare's edge. Remove once GenomeAsia
+// ingestion path is finalized.
+app.route("/api/probe", probeRouter);
 
 // /cases, /variants, /proposals — richer RESTful surface for future curator UI.
 app.route("/cases", casesRouter);
