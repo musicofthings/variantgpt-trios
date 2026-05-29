@@ -297,6 +297,14 @@ export function Workbench() {
             <button onClick={clearSelection} style={{ marginLeft: 6, fontSize: 12 }}>clear</button>
           </span>
         ) : null}
+        {caseId ? (
+          <button
+            onClick={() => navigate(`/cases/${caseId}/diff`)}
+            title="Compare this case against an external platform's analysis (Franklin / Genoox CSV)"
+          >
+            Compare with Franklin
+          </button>
+        ) : null}
         <button
           className="primary"
           disabled={selectedForReport.size === 0}

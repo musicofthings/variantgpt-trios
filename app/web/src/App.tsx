@@ -4,6 +4,7 @@ import { Dashboard } from "./pages/Dashboard";
 import { Intake } from "./pages/Intake";
 import { Workbench } from "./pages/Workbench";
 import { Report } from "./pages/Report";
+import { Diff } from "./pages/Diff";
 import { AuthGate, UserChip } from "./auth";
 
 export function App() {
@@ -29,6 +30,7 @@ export function App() {
             <Route path="/cases/new" element={<Intake />} />
             <Route path="/cases/:caseId" element={<Workbench />} />
             <Route path="/cases/:caseId/report" element={<Report />} />
+            <Route path="/cases/:caseId/diff" element={<Diff />} />
             <Route path="/tracks" element={<TracksStub />} />
           </Routes>
         </main>
