@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from .acmg import classify
+from .acmg import augment_context_evidence, classify
 from .annotation import AnnotationContext, annotate
 from .build_detect import detect_build
 from .inheritance import assign_models, compound_het_pass
@@ -71,6 +71,10 @@ def run_case(
         v.baseline_points = points
         v.evidence = ledger
         priority(v, hpo_ids)
+
+    # Context-aware criteria (PM3 / PP1; PP4 requires phenotype scoring, which
+    # this offline path doesn't run, so it no-ops here). Re-tallies baseline.
+    augment_context_evidence(variants, pedigree)
 
     proposals = reclassify_all(variants, snapshot_versions=track_versions)
 

@@ -57,7 +57,7 @@ Orchestrated by [`tracks/container_server.py`](tracks/container_server.py). Stag
 7. **IndiGenomes live API** — IGIB `data.php` queried per gene via Cloudflare Worker proxy (`/api/internal/indigen-proxy`) since Fly IPs are blocked by IGIB. MAX_GENES_PER_CASE=400, priority-sorted, 15s per-batch timeout, ANNOVAR↔VCF allele representation conversion for indel matching.
 8. **mygene.info** — `fetch_gene_info_for_symbols` returns gene name + NCBI Entrez summary + type_of_gene + OMIM. Stored at case level (`CaseEmission.gene_info: dict[symbol → GeneInfo]`) so the report renders real gene-function prose per variant without duplicating across thousands of rows.
 9. **HPO matching** ([annotation_sources/hpo_genes.py](engine/src/variantgpt_engine/annotation_sources/hpo_genes.py)) — downloads HPO consortium `genes_to_phenotype.txt` (~20 MB, 329k mappings), matches each variant's gene against case HPO terms; sets `v.hpo_matches` and boosts `priority_score`.
-10. **ACMG classify** ([acmg/criteria.py](engine/src/variantgpt_engine/acmg/criteria.py)) — Tavtigian point system; criteria implemented: PVS1, PS1, PS2, PM1, PM2, PM4, PM5, PM6, PP3, BA1, BS1, BS2, BP4, BP7.
+10. **ACMG classify** ([acmg/criteria.py](engine/src/variantgpt_engine/acmg/criteria.py)) — Tavtigian point system; per-variant criteria: PVS1, PS1, PS2, PM1, PM2, PM4, PM5, PM6, PP3, BA1, BS1, BS2, BP4, BP7. Context-aware criteria run as a post-classification pass ([acmg/context.py](engine/src/variantgpt_engine/acmg/context.py), `augment_context_evidence`, after phenotype scoring + comp-het + ClinVar, before reclassify): **PP4** (HPO phenotype-relevance ≥ 60 % Phrank, or 100 % coverage → Supporting), **PM3** (comp-het variant in trans with a ≥1★ pathogenic ClinVar partner in the same gene → Moderate), **PP1** (clean pedigree co-segregation: ≥2 affected carriers, no affected non-carrier, ≥1 informative unaffected non-carrier → Supporting; never fires on a single-affected trio). PS3 (functional studies) remains an honest not-fired stub — needs a functional-evidence dataset (MaveDB / ClinGen functional) not wired into the engine.
 11. **South-Asian reclassification** ([reclassify.py](engine/src/variantgpt_engine/reclassify.py)) — `SAS_SOURCES = ("indigenomes", "genomeasia", "genomeindia")`. gnomAD-SAS deliberately excluded (not representative of Indian population). PM2 retracted / BS1 fired on highest-AF Indian source.
 
 ### Inheritance models
@@ -166,7 +166,7 @@ Per-variant clinical narrative drafted by Anthropic Claude on demand:
 2. **Worker-side rate limiting on `/api/*`** — not wired. Cloudflare DDoS defaults apply, but no per-user limit.
 3. **LLM HPO extraction + AI synopsis drafting** — PRD §6.7 stub; needs AI Gateway → OpenRouter wiring.
 4. **Server-side PDF generation** — browser print already produces a clean clinical PDF; a `POST /api/cases/:id/report` endpoint that returns a server-rendered PDF would be a nice add for archival.
-5. **Compound-het PM3 trans-partner ClinVar lookup** — comp-het detection works; PM3 doesn't auto-fire because it needs trans-partner ClinVar classification.
+5. ~~**Compound-het PM3 trans-partner ClinVar lookup**~~ — ✅ done (2026-05-29, [acmg/context.py](engine/src/variantgpt_engine/acmg/context.py)). PM3 fires Moderate when a comp-het variant is in trans with a ≥1★ pathogenic ClinVar allele in the same gene. Remaining ACMG gaps: **PS3** (needs a functional-evidence dataset — MaveDB / ClinGen functional), PS1 / PM5 (need a ClinVar-by-gene+codon index), PP2 / BS3 / BS4 / BP2.
 6. **CNV/SV/mitochondrial heteroplasmy** — out of scope per PRD §1.
 
 ### Resolved this session (2026-05-28)
@@ -209,6 +209,38 @@ The `VITE_API_BASE` is hardcoded in the workflow file itself.
 ---
 
 ## Session log
+
+### 2026-05-29 (latest) — Context-aware ACMG criteria: PP4 + PM3 + PP1
+
+Three previously-stubbed ACMG criteria now fire, via a post-classification pass
+([acmg/context.py](engine/src/variantgpt_engine/acmg/context.py)) that runs once
+the rest of the annotation context exists (phenotype scores, comp-het config,
+ClinVar) and re-tallies each variant's baseline points + tier before reclassify.
+
+- **PP4** — consumes the phenotype-relevance score from the HPO work above.
+  Fires Supporting when Phrank ≥ 60 % (or coverage = 100 %); supporting-only,
+  never escalates. Demo: fires on BRCA1 / HBB / HBB (≥60 %); ATM (54) / MEFV (45)
+  / G6PD (40) stay below. One HBB moves LB→VUS (phenotype-relevant variants
+  shouldn't sit at Likely Benign).
+- **PM3** — for a comp-het variant, fires Moderate when a *different* variant in
+  the same gene (the in-trans allele established by `compound_het_pass`) carries
+  a ≥1★ pathogenic ClinVar classification. Closes the road-ahead PM3 gap.
+- **PP1** — clean pedigree co-segregation (≥2 affected carriers, no affected
+  non-carrier, ≥1 informative unaffected non-carrier). Conservative: doesn't
+  penalize unaffected carriers (AR), and a single-affected trio never reaches the
+  ≥2 bar — correct, a trio has no segregation power on its own.
+- **PS3 not implemented** — needs a functional-evidence dataset (MaveDB / ClinGen
+  functional assertions) that isn't wired in; left as an honest not-fired stub
+  rather than a fabricated call.
+- Wired into [container_server.py](tracks/container_server.py) (after HPO
+  scoring, before reclassify), [pipeline.py](engine/src/variantgpt_engine/pipeline.py),
+  and [build_demo_case.py](tracks/build_demo_case.py). `augment_context_evidence`
+  is idempotent + re-tallies. **No frontend change needed** — the generic
+  EvidenceItem renderer + POLARITY/STRENGTH maps already cover PP4/PM3/PP1.
+- Tests: [tests/test_acmg_context.py](engine/tests/test_acmg_context.py) — 12 tests
+  (PP4 thresholds/coverage/absent; PM3 trans-partner/star-gating; PP1 trio-null /
+  cosegregation / affected-non-carrier veto; BA1-override re-tally). Full suite
+  green (36 passed).
 
 ### 2026-05-29 (later) — HPO phenotype-proximity ranking + Analysis Workbench
 

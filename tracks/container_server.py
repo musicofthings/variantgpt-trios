@@ -52,7 +52,7 @@ sys.path.insert(0, str(THIS.parent))
 sys.path.insert(0, str(THIS.parents[1] / "engine" / "src"))
 
 from variantgpt_engine.pedigree import load_ped  # noqa: E402
-from variantgpt_engine.acmg import classify  # noqa: E402
+from variantgpt_engine.acmg import augment_context_evidence, classify  # noqa: E402
 from variantgpt_engine.annotation import AnnotationContext, annotate  # noqa: E402
 from variantgpt_engine.annotation_sources import genomeasia, hpo_genes, hpo_ontology, indigenomes, mygene, myvariant, vep_rest  # noqa: E402
 from variantgpt_engine.annotation_sources.csq import pick_canonical  # noqa: E402
@@ -722,6 +722,17 @@ async def _execute_job(job: dict[str, Any]) -> None:
                     except Exception as e:  # noqa: BLE001
                         emit(f"mygene.info: lookup failed (continuing without): {type(e).__name__}: {e}")
                     await post_status("running")
+
+            # Context-aware ACMG criteria (PP4 / PM3 / PP1) — must run after
+            # phenotype scoring + comp-het + ClinVar are all available, and
+            # before reclassification (which reads the baseline tier/points).
+            if real_mode and variants:
+                fired = augment_context_evidence(variants, pedigree)
+                emit(
+                    "ACMG context: fired PP4 on %d, PM3 on %d, PP1 on %d variants"
+                    % (fired["PP4"], fired["PM3"], fired["PP1"])
+                )
+                await post_status("running")
 
             emit("reclassifying (Indian-cohort baseline)")
             proposals = await asyncio.to_thread(

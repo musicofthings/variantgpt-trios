@@ -346,11 +346,11 @@
         },
         {
           "criterion": "PP4",
-          "fired": false,
-          "strength": null,
-          "points": 0,
-          "source": "",
-          "detail": ""
+          "fired": true,
+          "strength": "P",
+          "points": 1,
+          "source": "hpo_phenotype",
+          "detail": "phenotype relevance 66% (phrank); gene matches case terms HP:0002240, HP:0002910, HP:0001903, HP:0003124"
         },
         {
           "criterion": "BA1",
@@ -418,7 +418,7 @@
         }
       ],
       "baseline_tier": "P",
-      "baseline_points": 10,
+      "baseline_points": 11,
       "reclass_tier": null,
       "reclass_points": null,
       "reclass_delta": null,
@@ -1310,11 +1310,11 @@
         },
         {
           "criterion": "PP4",
-          "fired": false,
-          "strength": null,
-          "points": 0,
-          "source": "",
-          "detail": ""
+          "fired": true,
+          "strength": "P",
+          "points": 1,
+          "source": "hpo_phenotype",
+          "detail": "phenotype relevance 60% (phrank); gene matches case terms HP:0002240, HP:0001903, HP:0002910, HP:0003124"
         },
         {
           "criterion": "BA1",
@@ -1382,7 +1382,7 @@
         }
       ],
       "baseline_tier": "VUS",
-      "baseline_points": 0,
+      "baseline_points": 1,
       "reclass_tier": null,
       "reclass_points": null,
       "reclass_delta": null,
@@ -1646,11 +1646,11 @@
         },
         {
           "criterion": "PP4",
-          "fired": false,
-          "strength": null,
-          "points": 0,
-          "source": "",
-          "detail": ""
+          "fired": true,
+          "strength": "P",
+          "points": 1,
+          "source": "hpo_phenotype",
+          "detail": "phenotype relevance 60% (phrank); gene matches case terms HP:0002240, HP:0001903, HP:0002910, HP:0003124"
         },
         {
           "criterion": "BA1",
@@ -1717,8 +1717,8 @@
           "detail": ""
         }
       ],
-      "baseline_tier": "LB",
-      "baseline_points": -1,
+      "baseline_tier": "VUS",
+      "baseline_points": 0,
       "reclass_tier": null,
       "reclass_points": null,
       "reclass_delta": null,

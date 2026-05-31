@@ -16,6 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "engine" / "src"))
 
+from variantgpt_engine.acmg import augment_context_evidence  # noqa: E402
 from variantgpt_engine.annotation_sources import hpo_genes, hpo_ontology  # noqa: E402
 from variantgpt_engine.pedigree import load_ped  # noqa: E402
 from variantgpt_engine.phenotype import PhenotypeScorer  # noqa: E402
@@ -90,6 +91,13 @@ def main() -> None:
 
     scored = asyncio.run(_score_phenotype(emission))
     print(f"  phenotype-scored {scored} variants against {len(hpo)} HPO terms")
+
+    # Re-run the context-aware ACMG criteria now that phenotype scores exist,
+    # so the demo reflects PP4 (and any PM3/PP1) firing. run_case already ran
+    # them once with no phenotype data; this second pass is idempotent and
+    # re-tallies the baseline.
+    ctx_fired = augment_context_evidence(emission.variants, emission.pedigree)
+    print(f"  ACMG context: PP4={ctx_fired['PP4']} PM3={ctx_fired['PM3']} PP1={ctx_fired['PP1']}")
 
     out_engine = TRIO / "case.json"
     out_engine.write_text(emission.model_dump_json(indent=2), encoding="utf-8")
