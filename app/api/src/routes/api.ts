@@ -13,6 +13,7 @@
 import { Hono } from "hono";
 import { AwsClient } from "aws4fetch";
 import type { Bindings, Variables } from "../bindings";
+import { olsSelect } from "../hpo";
 
 export const apiRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
@@ -128,48 +129,10 @@ apiRouter.get("/hpo/search", async (c) => {
   const cached = await cache.match(cacheKey);
   if (cached) return cached;
 
-  // /api/select is OLS's autocomplete endpoint — does prefix matching on
+  // olsSelect hits OLS's /select autocomplete endpoint — prefix matching on
   // label + synonym fields, which /search does not. "microceph" matches
   // "Microcephaly" via /select; via /search it returns 0 results.
-  const olsUrl = new URL("https://www.ebi.ac.uk/ols4/api/select");
-  olsUrl.searchParams.set("q", q);
-  olsUrl.searchParams.set("ontology", "hp");
-  olsUrl.searchParams.set("rows", String(limit));
-  olsUrl.searchParams.set("fieldList", "obo_id,label,description,synonym,iri");
-
-  let upstream: Response;
-  try {
-    upstream = await fetch(olsUrl.toString(), {
-      headers: { accept: "application/json" },
-      cf: { cacheTtl: 3600, cacheEverything: true },
-    });
-  } catch (e) {
-    return c.json({ results: [], error: `ols unreachable: ${String(e).slice(0, 100)}` }, 502);
-  }
-  if (!upstream.ok) {
-    return c.json({ results: [], error: `ols ${upstream.status}` }, 502);
-  }
-
-  const data: {
-    response?: {
-      docs?: Array<{
-        obo_id?: string;
-        label?: string;
-        description?: string[];
-        synonym?: string[];
-        iri?: string;
-      }>;
-    };
-  } = await upstream.json();
-
-  const results = (data.response?.docs ?? [])
-    .filter((d) => d.obo_id?.startsWith("HP:"))
-    .map((d) => ({
-      id: d.obo_id!,
-      label: d.label ?? "",
-      definition: d.description?.[0],
-      synonyms: d.synonym?.slice(0, 3),
-    }));
+  const results = await olsSelect(q, limit);
 
   const res = c.json({ results });
   // Clone the response into the edge cache. Must set s-maxage for Cache API.

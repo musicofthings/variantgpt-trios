@@ -21,6 +21,7 @@
  */
 import { Hono } from "hono";
 import type { Bindings, Variables } from "../bindings";
+import { olsSelect } from "../hpo";
 
 export const aiRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
@@ -155,6 +156,168 @@ aiRouter.post("/synopsis", async (c) => {
     usage: data.usage,
   });
 });
+
+/**
+ * POST /api/ai/hpo-extract
+ *   Body: { text: string, existing_ids?: string[] }
+ *   Reply: { suggestions: [{ id, label, definition?, source_phrase }], model, generated_at }
+ *   Errors: 503 when ANTHROPIC_API_KEY is unset; 400 for empty text
+ *
+ * Two-stage, so the model can NEVER mint an HPO id:
+ *   1. Claude reads the free-text clinical history and returns distinct
+ *      phenotype phrases (signs/symptoms suitable for HPO mapping), ignoring
+ *      negated findings, normal findings, medications, and demographics.
+ *   2. Each phrase is grounded through EBI OLS4 (olsSelect) → the canonical
+ *      HP: term. Unresolved phrases are dropped; ids are deduped and the
+ *      caller's existing_ids are excluded.
+ *
+ * The result is a *suggestion* list for the curator to accept in Intake — never
+ * auto-applied.
+ */
+const HPO_MODEL_FALLBACK = "claude-3-5-haiku-latest";
+const MAX_EXTRACT_CHARS = 6000;
+const MAX_PHRASES = 25;
+
+aiRouter.post("/hpo-extract", async (c) => {
+  const key = c.env.ANTHROPIC_API_KEY;
+  if (!key) {
+    return c.json({ error: "ANTHROPIC_API_KEY is not configured on this worker" }, 503);
+  }
+
+  let body: { text?: string; existing_ids?: string[] };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "invalid JSON body" }, 400);
+  }
+  const text = (body?.text ?? "").trim().slice(0, MAX_EXTRACT_CHARS);
+  if (text.length < 3) {
+    return c.json({ error: "text is empty" }, 400);
+  }
+  const existing = new Set((body.existing_ids ?? []).filter(Boolean));
+
+  // Stage 1 — extract phenotype phrases. ANTHROPIC_MODEL_SYNOPSIS doubles as
+  // the cheap-model knob; OPENROUTER_MODEL_HPO is the documented HPO model name.
+  const model = c.env.ANTHROPIC_MODEL_SYNOPSIS || HPO_MODEL_FALLBACK;
+  const upstream = aiGatewayUrl(c.env) ?? ANTHROPIC_API;
+
+  let resp: Response;
+  try {
+    resp = await fetch(upstream, {
+      method: "POST",
+      headers: {
+        "x-api-key": key,
+        "anthropic-version": ANTHROPIC_VERSION,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: 600,
+        system: HPO_EXTRACT_SYSTEM,
+        messages: [{ role: "user", content: `Clinical history:\n${text}` }],
+      }),
+    });
+  } catch (e) {
+    return c.json({ error: `anthropic unreachable: ${String(e).slice(0, 200)}` }, 502);
+  }
+  if (!resp.ok) {
+    const txt = await resp.text().catch(() => "");
+    return c.json({ error: `anthropic ${resp.status}: ${txt.slice(0, 300)}` }, 502);
+  }
+
+  const data = await resp.json() as {
+    content?: Array<{ type: string; text?: string }>;
+    model?: string;
+  };
+  const raw = (data.content ?? [])
+    .filter((b) => b.type === "text")
+    .map((b) => b.text ?? "")
+    .join("\n")
+    .trim();
+
+  const phrases = parsePhrases(raw).slice(0, MAX_PHRASES);
+
+  // Stage 2 — ground each phrase through OLS4 (real HP: ids only). Dedupe by id.
+  const seen = new Set<string>(existing);
+  const suggestions: Array<{ id: string; label: string; definition?: string; source_phrase: string }> = [];
+  const lookups = await Promise.all(
+    phrases.map(async (phrase) => ({ phrase, hits: await olsSelect(phrase, 1) })),
+  );
+  for (const { phrase, hits } of lookups) {
+    const top = hits[0];
+    if (!top || seen.has(top.id)) continue;
+    seen.add(top.id);
+    suggestions.push({
+      id: top.id,
+      label: top.label,
+      definition: top.definition,
+      source_phrase: phrase,
+    });
+  }
+
+  return c.json({
+    suggestions,
+    model: data.model ?? model,
+    generated_at: new Date().toISOString(),
+  });
+});
+
+/** System prompt for HPO phrase extraction — returns a strict JSON array of
+ *  short phenotype phrases, nothing else. */
+const HPO_EXTRACT_SYSTEM = `You extract clinical phenotype terms from a patient's clinical history for mapping to the Human Phenotype Ontology (HPO).
+
+Return ONLY a JSON array of short phrase strings — no prose, no markdown, no keys. Example: ["seizures","global developmental delay","microcephaly"].
+
+Rules:
+- Each phrase is a single observable phenotypic abnormality (sign, symptom, or physical finding), phrased as a clinician would name an HPO term.
+- INCLUDE only findings PRESENT in THIS patient.
+- EXCLUDE: negated/absent findings ("no seizures"), explicitly normal findings, family-history findings about other people, medications, procedures, lab analyte values without a phenotype, and demographics (age, sex, consanguinity).
+- Normalize to the abnormality itself (e.g. "delayed milestones" → "global developmental delay"; "small head" → "microcephaly").
+- Deduplicate. Prefer the most specific single term over a compound description.
+- If no phenotypes are present, return [].`;
+
+/** Parse the model output into a phrase list. Tolerant: accepts a bare JSON
+ *  array, a fenced code block, or newline/comma-separated fallback text. */
+export function parsePhrases(raw: string): string[] {
+  if (!raw) return [];
+  let s = raw.trim();
+  // Strip a ```json … ``` fence if present.
+  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) s = fence[1].trim();
+  // Try strict JSON array first.
+  const start = s.indexOf("[");
+  const end = s.lastIndexOf("]");
+  if (start !== -1 && end > start) {
+    try {
+      const arr = JSON.parse(s.slice(start, end + 1));
+      if (Array.isArray(arr)) {
+        return dedupePhrases(arr.map((x) => String(x)));
+      }
+    } catch {
+      // fall through to line-based parsing
+    }
+  }
+  // Fallback: split on newlines / commas, strip bullets + quotes.
+  const parts = s
+    .split(/[\n,]+/)
+    .map((p) => p.replace(/^[\s\-*•\d.]+/, "").replace(/^["']|["']$/g, "").trim())
+    .filter(Boolean);
+  return dedupePhrases(parts);
+}
+
+function dedupePhrases(items: string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    const t = item.trim();
+    if (t.length < 2 || t.length > 80) continue;
+    const k = t.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(t);
+  }
+  return out;
+}
 
 /** Return the AI Gateway upstream URL when configured, else null. */
 function aiGatewayUrl(env: Bindings): string | null {
