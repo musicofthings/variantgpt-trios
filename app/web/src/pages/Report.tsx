@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { useParams, useSearchParams, Link } from "react-router-dom";
 import { TierChip } from "../components/TierChip";
 import { ReclassBadge } from "../components/ReclassBadge";
@@ -767,7 +767,7 @@ function geneParagraph(v: VariantRow): React.ReactNode {
   } else {
     parts.push(<> No overlap was found between this gene's HPO associations and the case's recorded phenotype terms; this does not exclude pathogenicity but reduces phenotype-driven prior probability.</>);
   }
-  return <>{parts}</>;
+  return <>{parts.map((p, i) => <Fragment key={i}>{p}</Fragment>)}</>;
 }
 
 /** Build a variant-level prose paragraph. Covers: molecular consequence,
@@ -814,7 +814,7 @@ function variantParagraph(v: VariantRow): React.ReactNode {
     parts.push(<>No direct HPO overlap was identified between {v.gene} and the case's recorded phenotype.</>);
   }
 
-  return <>{parts}</>;
+  return <>{parts.map((p, i) => <Fragment key={i}>{p}</Fragment>)}</>;
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {

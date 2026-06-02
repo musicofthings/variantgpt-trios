@@ -1,7 +1,7 @@
 # VariantGPT — Session Handover
 
 **Last updated:** 2026-06-02
-**Working tree:** `D:\Projects\VariantGPT` (git: `musicofthings/variantgpt-trios`, branch `feat/acmg-ps1-pm5-rate-limit-pdf` — 4 commits ahead of `main`, ready to merge)
+**Working tree:** `D:\Projects\VariantGPT` (git: `musicofthings/variantgpt-trios`, branch `main` — 2026-06-02 roadmap sweep merged)
 **Specs:** [`VariantGPT_PRD_TRD.md`](VariantGPT_PRD_TRD.md) · [`VariantGPT_Frontend_Design_Spec.md`](VariantGPT_Frontend_Design_Spec.md)
 **Deploy:** [`infra/DEPLOY.md`](infra/DEPLOY.md)
 
@@ -213,12 +213,13 @@ The `VITE_API_BASE` is hardcoded in the workflow file itself.
 ### 2026-06-02 (latest) — Roadmap sweep: PS1/PM5, rate limiting, LLM HPO, server-side report
 
 Four road-ahead items closed (GenomeAsia stays blocked — no data access yet).
-Branch `feat/acmg-ps1-pm5-rate-limit-pdf`, 4 commits.
+Merged to `main` (`bf121b0`), plus a follow-up Server-PDF button + Report
+hooks-order fix (`a27b58c`).
 
 - **ACMG PS1 + PM5 via ClinVar amino-acid index** ([clinvar_aa.py](engine/src/variantgpt_engine/annotation_sources/clinvar_aa.py)). New source enumerates P/LP missense from ClinVar (myvariant.info query API) per case gene, indexed by (gene, codon, alt_aa). Context pass ([acmg/context.py](engine/src/variantgpt_engine/acmg/context.py)) fires **PS1** (Strong — same aa change, different nt; self-match guarded by genomic id) and **PM5** (Moderate — novel missense at a residue where a *different* P/LP missense is established; stands down when PS1 fires). Thin/defensive network layer degrades to empty index (not-fired) on failure. Wired into [container_server.py](tracks/container_server.py) (priority-sorted gene set, MAX_GENES=400) before the existing context pass; demo/pipeline keep the offline no-index default. 20 new tests; full engine suite 56 passed, ruff clean.
 - **Per-user rate limiting** ([ratelimit.ts](app/api/src/ratelimit.ts)) on `/api/*` via Cloudflare's native Rate Limiting binding (`[[unsafe.bindings]]` ratelimit, 600/60s). Buckets by Clerk sub (IP fallback); internal+health exempt; dev pass-through when binding absent; 429 + Retry-After. 7 vitest cases.
 - **LLM HPO extraction** ([ai.ts](app/api/src/routes/ai.ts) `POST /api/ai/hpo-extract`). Two-stage so the model can never mint an HP id: Claude returns phenotype phrases (drops negated/normal/family/meds/demographics) → OLS4 (`olsSelect`, factored into new [hpo.ts](app/api/src/hpo.ts), shared with the `/hpo/search` typeahead) grounds each to a real HP: term. SPA Intake "Suggest HPO terms from history" button; suggested chips carry the source phrase; offline regex baseline retained + merged; 503 graceful fallback. Tolerant phrase parser, 7 vitest cases.
-- **Server-side clinical report** ([report.ts](app/api/src/report.ts), `GET|POST /api/cases/:id/report`). Pure `buildReportHtml(emission, selectedIds?)` builds a self-contained, print-ready HTML doc from case.json (cover + patient details + HPO + selected-findings, then per-variant pages with fired-only ACMG, family calls, AFs, predictors, reclassification). `?format=pdf` → Cloudflare Browser Rendering REST when `BROWSER_RENDERING_TOKEN` set, else 501→HTML. SPA Report "Archival HTML" button (JWT fetch → blob download). 8 vitest cases; verified in preview against the real demo case.json (cover + 11 variant pages, BRCA1 PVS1/PM2/PP3/PP4). API suite 22 passed; tsc + web build clean.
+- **Server-side clinical report** ([report.ts](app/api/src/report.ts), `GET|POST /api/cases/:id/report`). Pure `buildReportHtml(emission, selectedIds?)` builds a self-contained, print-ready HTML doc from case.json (cover + patient details + HPO + selected-findings, then per-variant pages with fired-only ACMG, family calls, AFs, predictors, reclassification). `?format=pdf` → Cloudflare Browser Rendering REST when `BROWSER_RENDERING_TOKEN` set, else 501→HTML. SPA Report toolbar gets **"Archival HTML"** + **"Server PDF"** buttons (JWT fetch → blob download; Server PDF shows a busy state + friendly 501 message). 8 vitest cases; verified in preview against the real demo case.json (cover + 11 variant pages, BRCA1 PVS1/PM2/PP3/PP4). API suite 22 passed; tsc + web build clean. (Follow-up `a27b58c` also fixed a latent Report Rules-of-Hooks bug — a `useMemo` below the loading/error early-returns crashed the page on cold load.)
 
 ### 2026-05-29 — Context-aware ACMG criteria: PP4 + PM3 + PP1
 
