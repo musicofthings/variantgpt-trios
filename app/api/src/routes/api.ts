@@ -14,6 +14,7 @@ import { Hono } from "hono";
 import { AwsClient } from "aws4fetch";
 import type { Bindings, Variables } from "../bindings";
 import { olsSelect } from "../hpo";
+import { buildReportHtml, type ReportEmission } from "../report";
 
 export const apiRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
@@ -549,6 +550,101 @@ apiRouter.get("/cases/:id", async (c) => {
   return new Response(obj.body, {
     status: 200,
     headers: { "content-type": "application/json" },
+  });
+});
+
+/**
+ * GET|POST /api/cases/:id/report?format=html|pdf&variants=id1,id2
+ *   → a self-contained, print-ready clinical report rendered server-side from
+ *     case.json. No client JS, no /api calls — a stable archival artifact.
+ *
+ * Variant selection: ?variants=<comma ids> (GET) or { variants: string[] } in
+ * the POST body. When omitted, archival mode renders reclassified-first, then
+ * highest-priority variants (capped).
+ *
+ * format=html (default) → text/html.
+ * format=pdf → server-renders to PDF via the Cloudflare Browser Rendering REST
+ *   API when BROWSER_RENDERING_TOKEN (+ R2_ACCOUNT_ID) is configured; otherwise
+ *   501 with a pointer to the HTML form (the browser's own Print-to-PDF already
+ *   produces a clean clinical PDF from the SPA).
+ */
+apiRouter.all("/cases/:id/report", async (c) => {
+  const method = c.req.method.toUpperCase();
+  if (method !== "GET" && method !== "POST") {
+    return c.json({ error: "method not allowed" }, 405);
+  }
+  const id = sanitize(c.req.param("id"));
+  if (!id) return c.json({ error: "bad caseId" }, 400);
+
+  const obj = await c.env.BUCKET.get(`cases/${id}/case.json`);
+  if (!obj) return c.json({ error: "case.json not found" }, 404);
+  let emission: ReportEmission;
+  try {
+    emission = (await obj.json()) as ReportEmission;
+  } catch {
+    return c.json({ error: "case.json is not valid JSON" }, 500);
+  }
+
+  // Variant selection — query string, plus POST-body { variants } if present.
+  let selected: string[] | undefined;
+  const q = c.req.query("variants");
+  if (q) selected = q.split(",").map((s) => s.trim()).filter(Boolean);
+  if (method === "POST") {
+    try {
+      const body = (await c.req.json()) as { variants?: string[] };
+      if (Array.isArray(body?.variants)) selected = body.variants.filter(Boolean);
+    } catch {
+      /* no/empty body is fine */
+    }
+  }
+
+  const html = buildReportHtml(emission, selected);
+  const format = (c.req.query("format") ?? "html").toLowerCase();
+
+  if (format !== "pdf") {
+    return new Response(html, {
+      status: 200,
+      headers: { "content-type": "text/html; charset=utf-8" },
+    });
+  }
+
+  // PDF path — Cloudflare Browser Rendering REST API.
+  const token = c.env.BROWSER_RENDERING_TOKEN;
+  const account = c.env.R2_ACCOUNT_ID;
+  if (!token || !account) {
+    return c.json(
+      {
+        error: "PDF rendering is not configured on this worker",
+        hint: "request ?format=html and use the browser's Print → Save as PDF, or set BROWSER_RENDERING_TOKEN",
+      },
+      501,
+    );
+  }
+
+  let pdfResp: Response;
+  try {
+    pdfResp = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${account}/browser-rendering/pdf`,
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({ html }),
+      },
+    );
+  } catch (e) {
+    return c.json({ error: `browser rendering unreachable: ${String(e).slice(0, 200)}` }, 502);
+  }
+  if (!pdfResp.ok) {
+    const txt = await pdfResp.text().catch(() => "");
+    return c.json({ error: `browser rendering ${pdfResp.status}: ${txt.slice(0, 300)}` }, 502);
+  }
+
+  return new Response(pdfResp.body, {
+    status: 200,
+    headers: {
+      "content-type": "application/pdf",
+      "content-disposition": `attachment; filename="variantgpt-${id}.pdf"`,
+    },
   });
 });
 
