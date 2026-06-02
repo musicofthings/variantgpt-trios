@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useParams, useSearchParams, Link } from "react-router-dom";
 import { TierChip } from "../components/TierChip";
 import { ReclassBadge } from "../components/ReclassBadge";
@@ -41,6 +41,17 @@ export function Report() {
     [reportVariants],
   );
 
+  // HPO id → term lookup. Computed from (possibly null) data here, above the
+  // early returns, so the hook order is identical across loading/loaded renders.
+  const hpoById = useMemo(() => {
+    const m = new Map<string, HPOTermRow>();
+    for (const h of data?.hpo ?? []) m.set(h.hpo_id, h);
+    return m;
+  }, [data]);
+
+  // Busy flag for the server-PDF button (render can take a few seconds).
+  const [pdfBusy, setPdfBusy] = useState(false);
+
   if (loading) return <div className="card">Loading case…</div>;
   if (error || !data) {
     return (
@@ -53,11 +64,6 @@ export function Report() {
 
   const pedigree = data.caseRow;
   const hpoTerms: HPOTermRow[] = data.hpo ?? [];
-  const hpoById = useMemo(() => {
-    const m = new Map<string, HPOTermRow>();
-    for (const h of hpoTerms) m.set(h.hpo_id, h);
-    return m;
-  }, [hpoTerms]);
   const geneInfoMap: Record<string, GeneInfoRow> = data.gene_info ?? {};
   const ch = data.clinical_history;
   const probandMember = data.proband_member;
@@ -115,6 +121,32 @@ export function Report() {
     }
   }
 
+  // Server-rendered PDF — same report HTML, printed to PDF by Cloudflare Browser
+  // Rendering. Returns binary, so we download the blob. A 501 means the Worker's
+  // BROWSER_RENDERING_TOKEN isn't set; we point the user at the HTML path.
+  async function exportPdf() {
+    const sel = selectedIds.size ? `&variants=${[...selectedIds].join(",")}` : "";
+    setPdfBusy(true);
+    try {
+      const resp = await apiFetch(api(`/cases/${caseId}/report?format=pdf${sel}`));
+      if (resp.status === 501) {
+        alert("Server-side PDF isn't configured on this server. Use “Archival HTML” or “Print / PDF” instead.");
+        return;
+      }
+      if (!resp.ok) {
+        let detail = "";
+        try { detail = ((await resp.json()) as { error?: string }).error ?? ""; } catch { /* non-JSON */ }
+        alert(`PDF render failed (${resp.status})${detail ? `: ${detail}` : ""}.`);
+        return;
+      }
+      downloadBlob(`${caseId}-report.pdf`, await resp.blob());
+    } catch (e) {
+      alert(`PDF render failed: ${String(e).slice(0, 160)}`);
+    } finally {
+      setPdfBusy(false);
+    }
+  }
+
   return (
     <>
       {/* Topbar — hidden on print via .no-print on global @media print rules.
@@ -131,6 +163,9 @@ export function Report() {
           <button onClick={exportTSV}>Export TSV</button>
           <button onClick={exportJSON}>Export JSON</button>
           <button onClick={exportArchivalHtml} title="Server-rendered, self-contained HTML for archival">Archival HTML</button>
+          <button onClick={exportPdf} disabled={pdfBusy} title="Server-rendered PDF via Cloudflare Browser Rendering">
+            {pdfBusy ? "Rendering PDF…" : "Server PDF"}
+          </button>
           <button className="primary" onClick={() => window.print()}>Print / PDF</button>
         </div>
       </div>
@@ -853,7 +888,10 @@ function fmt(v?: number | null): string {
 }
 
 function downloadFile(filename: string, content: string, mime: string) {
-  const blob = new Blob([content], { type: mime });
+  downloadBlob(filename, new Blob([content], { type: mime }));
+}
+
+function downloadBlob(filename: string, blob: Blob) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
