@@ -1,7 +1,7 @@
 # VariantGPT — Session Handover
 
-**Last updated:** 2026-05-29
-**Working tree:** `D:\Projects\VariantGPT` (git: `musicofthings/variantgpt-trios`, branch `main`)
+**Last updated:** 2026-06-02
+**Working tree:** `D:\Projects\VariantGPT` (git: `musicofthings/variantgpt-trios`, branch `feat/acmg-ps1-pm5-rate-limit-pdf` — 4 commits ahead of `main`, ready to merge)
 **Specs:** [`VariantGPT_PRD_TRD.md`](VariantGPT_PRD_TRD.md) · [`VariantGPT_Frontend_Design_Spec.md`](VariantGPT_Frontend_Design_Spec.md)
 **Deploy:** [`infra/DEPLOY.md`](infra/DEPLOY.md)
 
@@ -162,11 +162,11 @@ Per-variant clinical narrative drafted by Anthropic Claude on demand:
 
 ## Known gaps / road ahead
 
-1. **GenomeAsia 100K data ingestion** — task #35 scaffold complete (engine adapter + ingestion CLI + Worker URL signing all wired). Activates the moment `tracks/ingest_genomeasia.py` runs with downloaded VCFs and `GENOMEASIA_R2_PREFIX` is set on the Worker. Data path itself blocked from cloud egress; user runs ingestion from residential/VPN'd network. See [`GenomeAsia_config.md`](GenomeAsia_config.md).
-2. **Worker-side rate limiting on `/api/*`** — not wired. Cloudflare DDoS defaults apply, but no per-user limit.
-3. **LLM HPO extraction + AI synopsis drafting** — PRD §6.7 stub; needs AI Gateway → OpenRouter wiring.
-4. **Server-side PDF generation** — browser print already produces a clean clinical PDF; a `POST /api/cases/:id/report` endpoint that returns a server-rendered PDF would be a nice add for archival.
-5. ~~**Compound-het PM3 trans-partner ClinVar lookup**~~ — ✅ done (2026-05-29, [acmg/context.py](engine/src/variantgpt_engine/acmg/context.py)). PM3 fires Moderate when a comp-het variant is in trans with a ≥1★ pathogenic ClinVar allele in the same gene. Remaining ACMG gaps: **PS3** (needs a functional-evidence dataset — MaveDB / ClinGen functional), PS1 / PM5 (need a ClinVar-by-gene+codon index), PP2 / BS3 / BS4 / BP2.
+1. **GenomeAsia 100K data ingestion** — task #35 scaffold complete (engine adapter + ingestion CLI + Worker URL signing all wired). Activates the moment `tracks/ingest_genomeasia.py` runs with downloaded VCFs and `GENOMEASIA_R2_PREFIX` is set on the Worker. Data path itself blocked from cloud egress; user runs ingestion from residential/VPN'd network. **Blocked — no GenomeAsia data access yet** (confirmed 2026-06-02; stays on the roadmap). See [`GenomeAsia_config.md`](GenomeAsia_config.md).
+2. ~~**Worker-side rate limiting on `/api/*`**~~ — ✅ done (2026-06-02, [ratelimit.ts](app/api/src/ratelimit.ts)). Per-user (Clerk sub, IP fallback) via Cloudflare's native Rate Limiting binding; 600 req/60s; internal+health exempt; dev pass-through when binding absent.
+3. ~~**LLM HPO extraction**~~ — ✅ done (2026-06-02, [ai.ts](app/api/src/routes/ai.ts) `POST /api/ai/hpo-extract`). Two-stage: Claude extracts phenotype phrases → OLS4 grounds each to a real HP: id. SPA Intake "Suggest HPO terms from history" button. **AI synopsis drafting** already shipped 2026-05-29. PRD §6.7 closed.
+4. ~~**Server-side PDF generation**~~ — ✅ done (2026-06-02, [report.ts](app/api/src/report.ts), `GET|POST /api/cases/:id/report`). Self-contained server-rendered HTML (archival, no JS/auth to render); `?format=pdf` uses Cloudflare Browser Rendering REST when `BROWSER_RENDERING_TOKEN` is set, else 501→HTML. SPA Report "Archival HTML" button.
+5. ~~**Compound-het PM3 trans-partner ClinVar lookup**~~ — ✅ done (2026-05-29). ~~PS1 / PM5 (ClinVar-by-gene+codon index)~~ — ✅ done (2026-06-02, [clinvar_aa.py](engine/src/variantgpt_engine/annotation_sources/clinvar_aa.py) + [acmg/context.py](engine/src/variantgpt_engine/acmg/context.py)). Remaining ACMG gaps: **PS3** (needs a functional-evidence dataset — MaveDB / ClinGen functional), **PP2** (needs gene missense-constraint + mechanism data), **BS3 / BS4 / BP2**.
 6. **CNV/SV/mitochondrial heteroplasmy** — out of scope per PRD §1.
 
 ### Resolved this session (2026-05-28)
@@ -210,7 +210,17 @@ The `VITE_API_BASE` is hardcoded in the workflow file itself.
 
 ## Session log
 
-### 2026-05-29 (latest) — Context-aware ACMG criteria: PP4 + PM3 + PP1
+### 2026-06-02 (latest) — Roadmap sweep: PS1/PM5, rate limiting, LLM HPO, server-side report
+
+Four road-ahead items closed (GenomeAsia stays blocked — no data access yet).
+Branch `feat/acmg-ps1-pm5-rate-limit-pdf`, 4 commits.
+
+- **ACMG PS1 + PM5 via ClinVar amino-acid index** ([clinvar_aa.py](engine/src/variantgpt_engine/annotation_sources/clinvar_aa.py)). New source enumerates P/LP missense from ClinVar (myvariant.info query API) per case gene, indexed by (gene, codon, alt_aa). Context pass ([acmg/context.py](engine/src/variantgpt_engine/acmg/context.py)) fires **PS1** (Strong — same aa change, different nt; self-match guarded by genomic id) and **PM5** (Moderate — novel missense at a residue where a *different* P/LP missense is established; stands down when PS1 fires). Thin/defensive network layer degrades to empty index (not-fired) on failure. Wired into [container_server.py](tracks/container_server.py) (priority-sorted gene set, MAX_GENES=400) before the existing context pass; demo/pipeline keep the offline no-index default. 20 new tests; full engine suite 56 passed, ruff clean.
+- **Per-user rate limiting** ([ratelimit.ts](app/api/src/ratelimit.ts)) on `/api/*` via Cloudflare's native Rate Limiting binding (`[[unsafe.bindings]]` ratelimit, 600/60s). Buckets by Clerk sub (IP fallback); internal+health exempt; dev pass-through when binding absent; 429 + Retry-After. 7 vitest cases.
+- **LLM HPO extraction** ([ai.ts](app/api/src/routes/ai.ts) `POST /api/ai/hpo-extract`). Two-stage so the model can never mint an HP id: Claude returns phenotype phrases (drops negated/normal/family/meds/demographics) → OLS4 (`olsSelect`, factored into new [hpo.ts](app/api/src/hpo.ts), shared with the `/hpo/search` typeahead) grounds each to a real HP: term. SPA Intake "Suggest HPO terms from history" button; suggested chips carry the source phrase; offline regex baseline retained + merged; 503 graceful fallback. Tolerant phrase parser, 7 vitest cases.
+- **Server-side clinical report** ([report.ts](app/api/src/report.ts), `GET|POST /api/cases/:id/report`). Pure `buildReportHtml(emission, selectedIds?)` builds a self-contained, print-ready HTML doc from case.json (cover + patient details + HPO + selected-findings, then per-variant pages with fired-only ACMG, family calls, AFs, predictors, reclassification). `?format=pdf` → Cloudflare Browser Rendering REST when `BROWSER_RENDERING_TOKEN` set, else 501→HTML. SPA Report "Archival HTML" button (JWT fetch → blob download). 8 vitest cases; verified in preview against the real demo case.json (cover + 11 variant pages, BRCA1 PVS1/PM2/PP3/PP4). API suite 22 passed; tsc + web build clean.
+
+### 2026-05-29 — Context-aware ACMG criteria: PP4 + PM3 + PP1
 
 Three previously-stubbed ACMG criteria now fire, via a post-classification pass
 ([acmg/context.py](engine/src/variantgpt_engine/acmg/context.py)) that runs once
