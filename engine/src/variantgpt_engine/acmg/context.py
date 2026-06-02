@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 
+from ..annotation_sources.clinvar_aa import ClinVarAAIndex, parse_protein_change
 from ..models import Affected, EvidenceItem, Pedigree, Variant
 from .engine import DEFAULT_THRESHOLDS, Thresholds, tier_for
 from .points import points_for
@@ -164,6 +165,69 @@ def evaluate_pp1(v: Variant, pedigree: Pedigree) -> EvidenceItem:
     return EvidenceItem(criterion="PP1", fired=False)
 
 
+# ───────────────────────── PS1 / PM5 (residue anchors) ─────────────────────────
+
+
+def _genomic_id(v: Variant) -> str | None:
+    """Best-effort myvariant-style genomic id for an SNV, so the residue index
+    can skip a query variant matching its own ClinVar record. Only SNVs are
+    relevant here (PS1/PM5 are missense)."""
+    if len(v.ref) == 1 and len(v.alt) == 1:
+        chrom = v.chrom if v.chrom.startswith("chr") else f"chr{v.chrom}"
+        return f"{chrom}:g.{v.pos}{v.ref}>{v.alt}"
+    return None
+
+
+def evaluate_ps1(v: Variant, aa_index: ClinVarAAIndex) -> EvidenceItem:
+    """PS1 — same amino-acid change as an established P/LP variant, reached by a
+    *different* nucleotide change. Fires Strong when the residue index holds a
+    P/LP missense with the identical resulting amino acid at the same codon,
+    originating from a different genomic variant."""
+    if (v.consequence or "") != "missense_variant" or not v.gene:
+        return EvidenceItem(criterion="PS1", fired=False)
+    change = parse_protein_change(v.hgvs_p)
+    if change is None:
+        return EvidenceItem(criterion="PS1", fired=False)
+    anchor = aa_index.same_change(v.gene, change, exclude_id=_genomic_id(v))
+    if anchor is None:
+        return EvidenceItem(criterion="PS1", fired=False)
+    return EvidenceItem(
+        criterion="PS1", fired=True, strength="S", points=points_for("S"),
+        source="clinvar_aa_index",
+        detail=(
+            f"same amino-acid change p.{change.ref}{change.pos}{change.alt} "
+            f"established {anchor.significance} in ClinVar ({anchor.stars}★)"
+        ),
+    )
+
+
+def evaluate_pm5(v: Variant, aa_index: ClinVarAAIndex) -> EvidenceItem:
+    """PM5 — novel missense at a residue where a *different* amino-acid change
+    is established P/LP. Fires Moderate. Suppressed when PS1 already fires (the
+    same-change anchor is the stronger, more specific signal)."""
+    if (v.consequence or "") != "missense_variant" or not v.gene:
+        return EvidenceItem(criterion="PM5", fired=False)
+    change = parse_protein_change(v.hgvs_p)
+    if change is None:
+        return EvidenceItem(criterion="PM5", fired=False)
+    exclude = _genomic_id(v)
+    # Don't double-count: if the same change is established (PS1), PM5 stands down.
+    if aa_index.same_change(v.gene, change, exclude_id=exclude) is not None:
+        return EvidenceItem(criterion="PM5", fired=False)
+    anchor = aa_index.other_change_at_residue(v.gene, change, exclude_id=exclude)
+    if anchor is None:
+        return EvidenceItem(criterion="PM5", fired=False)
+    return EvidenceItem(
+        criterion="PM5", fired=True, strength="M", points=points_for("M"),
+        source="clinvar_aa_index",
+        detail=(
+            f"different change at residue {change.pos} "
+            f"(p.{anchor.change.ref}{anchor.change.pos}{anchor.change.alt}) "
+            f"established {anchor.significance} in ClinVar ({anchor.stars}★)"
+        ),
+    )
+
+
 # ───────────────────────── driver + re-tally ─────────────────────────
 
 def _replace_evidence(v: Variant, item: EvidenceItem) -> None:
@@ -194,12 +258,13 @@ def augment_context_evidence(
     variants: list[Variant],
     pedigree: Pedigree,
     algo: str = "phrank",
+    aa_index: ClinVarAAIndex | None = None,
 ) -> dict[str, int]:
-    """Run PP4 / PM3 / PP1 across the variant set and re-tally affected
-    variants. Returns a count of how many variants each criterion newly fired
-    on (for pipeline logging)."""
+    """Run PP4 / PM3 / PP1 (and PS1 / PM5 when a ClinVar residue index is
+    supplied) across the variant set and re-tally affected variants. Returns a
+    count of how many variants each criterion newly fired on (for logging)."""
     pm3_map = evaluate_pm3(variants)
-    fired = {"PP4": 0, "PM3": 0, "PP1": 0}
+    fired = {"PP4": 0, "PM3": 0, "PP1": 0, "PS1": 0, "PM5": 0}
     for v in variants:
         before = {e.criterion: e.fired for e in v.evidence}
 
@@ -213,9 +278,16 @@ def augment_context_evidence(
         if pm3 is not None:
             _replace_evidence(v, pm3)
 
-        # Re-tally only if any of the three changed a not-fired → fired edge.
+        ps1 = pm5 = None
+        if aa_index is not None and len(aa_index):
+            ps1 = evaluate_ps1(v, aa_index)
+            _replace_evidence(v, ps1)
+            pm5 = evaluate_pm5(v, aa_index)
+            _replace_evidence(v, pm5)
+
+        # Re-tally only if any criterion changed a not-fired → fired edge.
         changed = False
-        for name, item in (("PP4", pp4), ("PM3", pm3), ("PP1", pp1)):
+        for name, item in (("PP4", pp4), ("PM3", pm3), ("PP1", pp1), ("PS1", ps1), ("PM5", pm5)):
             if item is not None and item.fired and not before.get(name, False):
                 fired[name] += 1
                 changed = True
