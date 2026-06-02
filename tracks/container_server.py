@@ -54,7 +54,7 @@ sys.path.insert(0, str(THIS.parents[1] / "engine" / "src"))
 from variantgpt_engine.pedigree import load_ped  # noqa: E402
 from variantgpt_engine.acmg import augment_context_evidence, classify  # noqa: E402
 from variantgpt_engine.annotation import AnnotationContext, annotate  # noqa: E402
-from variantgpt_engine.annotation_sources import genomeasia, hpo_genes, hpo_ontology, indigenomes, mygene, myvariant, vep_rest  # noqa: E402
+from variantgpt_engine.annotation_sources import clinvar_aa, genomeasia, hpo_genes, hpo_ontology, indigenomes, mygene, myvariant, vep_rest  # noqa: E402
 from variantgpt_engine.annotation_sources.csq import pick_canonical  # noqa: E402
 from variantgpt_engine import cache  # noqa: E402
 from variantgpt_engine.build_detect import detect_build  # noqa: E402
@@ -723,14 +723,39 @@ async def _execute_job(job: dict[str, Any]) -> None:
                         emit(f"mygene.info: lookup failed (continuing without): {type(e).__name__}: {e}")
                     await post_status("running")
 
-            # Context-aware ACMG criteria (PP4 / PM3 / PP1) — must run after
-            # phenotype scoring + comp-het + ClinVar are all available, and
-            # before reclassification (which reads the baseline tier/points).
+            # ClinVar amino-acid index — the residue-level lookup PS1/PM5 need.
+            # Built once per case over the candidate gene set (priority-sorted
+            # so phenotype-relevant genes come first under the MAX_GENES cap).
+            # Best-effort: a query failure degrades to an empty index (PS1/PM5
+            # simply stay not-fired), never an exception.
+            aa_index = None
             if real_mode and variants:
-                fired = augment_context_evidence(variants, pedigree)
+                genes_sorted = [
+                    g for g, _ in sorted(
+                        {v.gene: v.priority_score for v in variants if v.gene}.items(),
+                        key=lambda kv: -kv[1],
+                    )
+                ]
+                if genes_sorted:
+                    emit(f"ClinVar aa-index: enumerating P/LP missense for {len(genes_sorted)} genes")
+                    try:
+                        aa_index = await clinvar_aa.fetch_aa_index(genes_sorted)
+                        emit(
+                            f"ClinVar aa-index: {len(aa_index)} established P/LP residues "
+                            f"across {aa_index.gene_count} genes"
+                        )
+                    except Exception as e:  # noqa: BLE001
+                        emit(f"ClinVar aa-index: build failed (continuing without): {type(e).__name__}: {e}")
+                    await post_status("running")
+
+            # Context-aware ACMG criteria (PP4 / PM3 / PP1 / PS1 / PM5) — must run
+            # after phenotype scoring + comp-het + ClinVar + the aa-index are all
+            # available, and before reclassification (which reads the baseline).
+            if real_mode and variants:
+                fired = augment_context_evidence(variants, pedigree, aa_index=aa_index)
                 emit(
-                    "ACMG context: fired PP4 on %d, PM3 on %d, PP1 on %d variants"
-                    % (fired["PP4"], fired["PM3"], fired["PP1"])
+                    "ACMG context: fired PP4 on %d, PM3 on %d, PP1 on %d, PS1 on %d, PM5 on %d variants"
+                    % (fired["PP4"], fired["PM3"], fired["PP1"], fired["PS1"], fired["PM5"])
                 )
                 await post_status("running")
 

@@ -4,6 +4,7 @@ import { TierChip } from "../components/TierChip";
 import { ReclassBadge } from "../components/ReclassBadge";
 import { PopulationFreqPanel } from "../components/PopulationFreqPanel";
 import { useDemoCase } from "../caseData";
+import { api, apiFetch } from "../apiBase";
 import type { GeneInfoRow, HPOTermRow } from "../caseData";
 import type { EvidenceRow, InheritanceModel, VariantRow } from "../types";
 
@@ -96,6 +97,24 @@ export function Report() {
     );
   }
 
+  // Server-rendered archival report — a self-contained HTML document built by
+  // the Worker straight from case.json (no app shell, no JS). Fetched with the
+  // Clerk JWT, then handed to the browser as a download.
+  async function exportArchivalHtml() {
+    const sel = selectedIds.size ? `&variants=${[...selectedIds].join(",")}` : "";
+    try {
+      const resp = await apiFetch(api(`/cases/${caseId}/report?format=html${sel}`));
+      if (!resp.ok) {
+        alert(`Archival report failed (${resp.status}).`);
+        return;
+      }
+      const html = await resp.text();
+      downloadFile(`${caseId}-report.html`, html, "text/html");
+    } catch (e) {
+      alert(`Archival report failed: ${String(e).slice(0, 160)}`);
+    }
+  }
+
   return (
     <>
       {/* Topbar — hidden on print via .no-print on global @media print rules.
@@ -111,6 +130,7 @@ export function Report() {
           <Link to={`/cases/${caseId}`}><button>← Back to workbench</button></Link>
           <button onClick={exportTSV}>Export TSV</button>
           <button onClick={exportJSON}>Export JSON</button>
+          <button onClick={exportArchivalHtml} title="Server-rendered, self-contained HTML for archival">Archival HTML</button>
           <button className="primary" onClick={() => window.print()}>Print / PDF</button>
         </div>
       </div>

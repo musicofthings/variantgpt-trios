@@ -15,6 +15,15 @@ migrations_dir = "../../infra/migrations"
 binding = "BUCKET"
 bucket_name = "variantgpt"
 
+# Native Rate Limiting binding (open beta) — per-user /api/* throttle. 600
+# requests / 60s per Clerk user (IP fallback). Per-colo, stateless, no storage
+# cost. The rate-limit middleware no-ops when this binding is absent.
+[[unsafe.bindings]]
+name = "RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "1001"
+simple = { limit = 600, period = 60 }
+
 # AI Gateway → OpenRouter / Workers AI (PRD §6.7).
 [vars]
 AI_GATEWAY_ACCOUNT = ""

@@ -38,6 +38,20 @@ export type Bindings = {
    */
   CLERK_ISSUER?: string;
   CLERK_AUDIENCE?: string;
+
+  /** Cloudflare native Rate Limiting binding (open beta), declared in
+   *  wrangler.toml. Buckets /api/* requests per Clerk user (IP fallback).
+   *  Optional: when absent the rate-limit middleware is a pass-through. */
+  RATE_LIMITER?: {
+    limit(opts: { key: string }): Promise<{ success: boolean }>;
+  };
+
+  /** Optional Cloudflare Browser Rendering REST token (account API token with
+   *  the Browser Rendering permission). When set (alongside R2_ACCOUNT_ID, which
+   *  is the same Cloudflare account id), POST /api/cases/:id/report?format=pdf
+   *  server-renders the report HTML to PDF. When unset, the endpoint still
+   *  returns the self-contained HTML (?format=html, the default). */
+  BROWSER_RENDERING_TOKEN?: string;
 };
 
 export type Variables = {

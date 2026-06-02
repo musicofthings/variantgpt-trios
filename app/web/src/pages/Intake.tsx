@@ -19,7 +19,7 @@ const MODE_LABEL: Record<string, string> = {
 /** Case intake (design spec §4.2 + PRD §4.1). Vertical sectioned flow.
  * Final step uploads VCF/BAM to the dev API and triggers an engine run. */
 
-interface HPOEntry { id: string; label?: string; definition?: string; confirmed: boolean; }
+interface HPOEntry { id: string; label?: string; definition?: string; confirmed: boolean; sourcePhrase?: string; }
 
 const HPO_LABEL: Record<string, string> = {
   "HP:0001250": "Seizure",
@@ -74,7 +74,16 @@ export function Intake() {
     }
   }, [jobStatus?.status, caseId, navigate]);
 
-  const suggested = useMemo<HPOEntry[]>(() => {
+  // LLM-extracted candidates from /api/ai/hpo-extract (button-triggered to keep
+  // cost predictable). Each carries the source phrase for curator transparency.
+  const [aiSuggested, setAiSuggested] = useState<HPOEntry[]>([]);
+  const [extractState, setExtractState] = useState<"idle" | "loading" | "done" | "error" | "unavailable">("idle");
+  const [extractMsg, setExtractMsg] = useState("");
+
+  // Lightweight offline baseline — a few common terms matched by regex so the
+  // panel is useful even before (or without) an LLM call. Merged with the
+  // LLM results below; deduped against each other and against confirmed terms.
+  const localSuggested = useMemo<HPOEntry[]>(() => {
     const text = history.toLowerCase();
     const hits: HPOEntry[] = [];
     if (/seizure|epilep|convuls/.test(text)) hits.push({ id: "HP:0001250", label: "Seizure", confirmed: false });
@@ -82,8 +91,62 @@ export function Intake() {
     if (/regress/.test(text)) hits.push({ id: "HP:0002376", label: "Developmental regression", confirmed: false });
     if (/microcephal/.test(text)) hits.push({ id: "HP:0000252", label: "Microcephaly", confirmed: false });
     if (/anemi|haemoglob|hemoglob|hbe|sickle/.test(text)) hits.push({ id: "HP:0001903", label: "Anemia", confirmed: false });
-    return hits.filter((s) => !hpo.some((h) => h.id === s.id));
-  }, [history, hpo]);
+    return hits;
+  }, [history]);
+
+  const suggested = useMemo<HPOEntry[]>(() => {
+    const merged: HPOEntry[] = [];
+    const seen = new Set(hpo.map((h) => h.id));
+    for (const s of [...aiSuggested, ...localSuggested]) {
+      if (seen.has(s.id)) continue;
+      seen.add(s.id);
+      merged.push(s);
+    }
+    return merged;
+  }, [aiSuggested, localSuggested, hpo]);
+
+  async function extractHpoFromHistory() {
+    if (history.trim().length < 3) return;
+    setExtractState("loading");
+    setExtractMsg("");
+    try {
+      const resp = await apiFetch(api("/ai/hpo-extract"), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ text: history, existing_ids: hpo.map((h) => h.id) }),
+      });
+      if (resp.status === 503) {
+        setExtractState("unavailable");
+        setExtractMsg("AI extraction isn't configured on this server — using keyword matches only.");
+        return;
+      }
+      if (!resp.ok) {
+        setExtractState("error");
+        setExtractMsg(`Extraction failed (${resp.status}).`);
+        return;
+      }
+      const data = (await resp.json()) as {
+        suggestions?: Array<{ id: string; label: string; definition?: string; source_phrase?: string }>;
+      };
+      const next: HPOEntry[] = (data.suggestions ?? []).map((s) => ({
+        id: s.id,
+        label: s.label,
+        definition: s.definition,
+        sourcePhrase: s.source_phrase,
+        confirmed: false,
+      }));
+      setAiSuggested(next);
+      setExtractState("done");
+      setExtractMsg(
+        next.length
+          ? `${next.length} term${next.length === 1 ? "" : "s"} extracted — click + to confirm.`
+          : "No new phenotype terms found in the history.",
+      );
+    } catch (e) {
+      setExtractState("error");
+      setExtractMsg(`Extraction failed: ${String(e).slice(0, 120)}`);
+    }
+  }
 
   function confirmSuggested(e: HPOEntry) { setHpo([...hpo, { ...e, confirmed: true }]); }
   function removeHpo(id: string) { setHpo(hpo.filter((h) => h.id !== id)); }
@@ -328,7 +391,11 @@ export function Intake() {
                 </span>
               ))}
               {suggested.map((s) => (
-                <span key={s.id} className="hpo-chip suggested" title="AI-suggested — confirm to add">
+                <span
+                  key={s.id}
+                  className="hpo-chip suggested"
+                  title={s.sourcePhrase ? `From history: "${s.sourcePhrase}" — confirm to add` : "Suggested — confirm to add"}
+                >
                   <span>{s.id}</span>
                   {s.label ? <span style={{ fontFamily: "var(--font-body)" }}>· {s.label}</span> : null}
                   <button onClick={() => confirmSuggested(s)} aria-label={`Confirm ${s.id}`}>+</button>
@@ -393,11 +460,26 @@ export function Intake() {
               style={{ width: "100%", marginTop: 12 }}
               placeholder="Onset, course, examination findings, imaging, prior testing — anything relevant to interpretation. Free text. Used verbatim on the report's first page."
             />
-            <p style={{ color: "var(--ink-soft)", marginTop: 8, fontSize: 12 }}>
-              {suggested.length
-                ? `${suggested.length} HPO ${suggested.length === 1 ? "term" : "terms"} suggested above — click + to confirm.`
-                : "Save history to surface LLM-extracted HPO candidates. Fields populated here render on page 1 of the report."}
-            </p>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 8, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                onClick={extractHpoFromHistory}
+                disabled={history.trim().length < 3 || extractState === "loading"}
+              >
+                {extractState === "loading" ? "Extracting…" : "Suggest HPO terms from history"}
+              </button>
+              <span
+                style={{
+                  color: extractState === "error" ? "var(--danger, #b00)" : "var(--ink-soft)",
+                  fontSize: 12,
+                }}
+              >
+                {extractMsg ||
+                  (suggested.length
+                    ? `${suggested.length} HPO ${suggested.length === 1 ? "term" : "terms"} suggested above — click + to confirm.`
+                    : "Extract HPO candidates from the history above; each is grounded to a real HP id via OLS4. Curator confirms before they're added.")}
+              </span>
+            </div>
           </section>
 
           <section id="sec-vcf" className="card" style={{ marginBottom: 24 }}>

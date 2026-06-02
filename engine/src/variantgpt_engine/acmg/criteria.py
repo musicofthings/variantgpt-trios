@@ -54,14 +54,10 @@ def ps1(v: Variant) -> EvidenceItem:
     """Same amino-acid change as a previously-established P/LP variant at a
     different nucleotide change.
 
-    Strict implementation requires a ClinVar gene-level index keyed by
-    (gene, codon, alt_aa). myvariant.info gives us only per-variant ClinVar,
-    not "every other variant at this codon." Deferred to a follow-up commit
-    that uses NCBI eutils to enumerate ClinVar by gene then caches by codon.
-
-    For now, returns not-fired but exposes a ClinVar-anchor evidence row
-    (`CLINVAR_ANCHOR` below) so the curator still sees prior classifications
-    when present."""
+    Decided in the context pass (acmg/context.evaluate_ps1) once the ClinVar
+    amino-acid index (annotation_sources/clinvar_aa.py) has enumerated every
+    P/LP missense in the gene by residue. classify() emits this not-fired stub;
+    augment_context_evidence overwrites it when an anchor exists."""
     return EvidenceItem(criterion="PS1", fired=False)
 
 
@@ -180,7 +176,9 @@ def pm5(v: Variant) -> EvidenceItem:
     """Novel missense at a residue where a *different* missense change is
     established as P/LP.
 
-    Same indexing requirement as PS1 (ClinVar by gene+coden). Deferred.
+    Decided in the context pass (acmg/context.evaluate_pm5) against the same
+    ClinVar amino-acid index PS1 uses. Stands down when PS1 (same-change anchor)
+    fires. classify() emits this not-fired stub; the context pass overwrites it.
     """
     return EvidenceItem(criterion="PM5", fired=False)
 
