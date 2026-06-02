@@ -3,6 +3,7 @@ import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import type { Bindings, Variables } from "./bindings";
 import { clerkAuthGated } from "./auth";
+import { rateLimitGated } from "./ratelimit";
 import { casesRouter } from "./routes/cases";
 import { variantsRouter } from "./routes/variants";
 import { proposalsRouter } from "./routes/proposals";
@@ -24,6 +25,10 @@ app.use("*", cors({
 // /health are bypassed by isPublicPath() inside clerkAuthGated. When
 // CLERK_ISSUER is unset, the middleware is a pass-through (dev mode).
 app.use("*", clerkAuthGated);
+// Per-user rate limiting — runs AFTER auth so it can bucket by Clerk user id
+// (falls back to client IP). Internal/health paths are exempt; no-ops when the
+// RATE_LIMITER binding is absent (dev/preview).
+app.use("*", rateLimitGated);
 
 app.get("/", (c) => c.json({ name: "variantgpt-api", version: "0.1.0" }));
 app.get("/health", (c) => c.json({ ok: true }));

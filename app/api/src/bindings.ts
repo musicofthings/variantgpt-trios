@@ -38,6 +38,13 @@ export type Bindings = {
    */
   CLERK_ISSUER?: string;
   CLERK_AUDIENCE?: string;
+
+  /** Cloudflare native Rate Limiting binding (open beta), declared in
+   *  wrangler.toml. Buckets /api/* requests per Clerk user (IP fallback).
+   *  Optional: when absent the rate-limit middleware is a pass-through. */
+  RATE_LIMITER?: {
+    limit(opts: { key: string }): Promise<{ success: boolean }>;
+  };
 };
 
 export type Variables = {
