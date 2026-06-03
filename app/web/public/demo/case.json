@@ -181,6 +181,84 @@
           ]
         }
       },
+      "gene_phenotypes": [
+        {
+          "hpo_id": "HP:0002910",
+          "label": "Elevated circulating hepatic transaminase concentration",
+          "matches_case": true
+        },
+        {
+          "hpo_id": "HP:0001903",
+          "label": "Anemia",
+          "matches_case": true
+        },
+        {
+          "hpo_id": "HP:0011985",
+          "label": "Acholic stools",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0012334",
+          "label": "Extrahepatic cholestasis",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0005249",
+          "label": "Functional intestinal obstruction",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0100592",
+          "label": "Peritoneal abscess",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0025318",
+          "label": "Ovarian carcinoma",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0030406",
+          "label": "Primary peritoneal carcinoma",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0100574",
+          "label": "Biliary tract neoplasm",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0005522",
+          "label": "Pyridoxine-responsive sideroblastic anemia",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0012432",
+          "label": "Chronic fatigue",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0010469",
+          "label": "Absent testis",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0002254",
+          "label": "Intermittent diarrhea",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0011027",
+          "label": "Abnormal fallopian tube morphology",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0100867",
+          "label": "Duodenal stenosis",
+          "matches_case": false
+        }
+      ],
+      "gene_phenotype_total": 166,
       "inheritance_models": [
         "het_inherited"
       ],
@@ -503,6 +581,84 @@
           ]
         }
       },
+      "gene_phenotypes": [
+        {
+          "hpo_id": "HP:0002910",
+          "label": "Elevated circulating hepatic transaminase concentration",
+          "matches_case": true
+        },
+        {
+          "hpo_id": "HP:0005357",
+          "label": "Defective B cell differentiation",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0008348",
+          "label": "Decreased circulating IgG2 concentration",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0012113",
+          "label": "Abnormal circulating creatine concentration",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0030406",
+          "label": "Primary peritoneal carcinoma",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0100571",
+          "label": "Cardiac diverticulum",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0000524",
+          "label": "Conjunctival telangiectasia",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0012174",
+          "label": "Glioblastoma multiforme",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0012191",
+          "label": "B-cell lymphoma",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0012189",
+          "label": "Hodgkin lymphoma",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0000134",
+          "label": "Female hypogonadism",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0011027",
+          "label": "Abnormal fallopian tube morphology",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0006254",
+          "label": "Elevated circulating alpha-fetoprotein concentration",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0012125",
+          "label": "Prostate cancer",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0006725",
+          "label": "Pancreatic adenocarcinoma",
+          "matches_case": false
+        }
+      ],
+      "gene_phenotype_total": 138,
       "inheritance_models": [
         "de_novo"
       ],
@@ -809,6 +965,84 @@
           ]
         }
       },
+      "gene_phenotypes": [
+        {
+          "hpo_id": "HP:0011717",
+          "label": "Atrioventricular reentrant tachycardia",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0100293",
+          "label": "Hypertrophied muscle fibers",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0008978",
+          "label": "Necrotizing myopathy",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0030091",
+          "label": "Absent muscle fiber merosin",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0005991",
+          "label": "Limited neck flexion",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0011399",
+          "label": "Tibialis anterior muscle atrophy",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0006699",
+          "label": "Premature atrial contractions",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0003789",
+          "label": "Minicore myopathy",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0031237",
+          "label": "Internally nucleated skeletal muscle fibers",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0003715",
+          "label": "Myofibrillar myopathy",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0008963",
+          "label": "Tibialis muscle weakness",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0009049",
+          "label": "Peroneal muscle atrophy",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0004889",
+          "label": "Intermittent episodes of respiratory insufficiency due to muscle weakness",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0001708",
+          "label": "Right ventricular failure",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0002877",
+          "label": "Nocturnal hypoventilation",
+          "matches_case": false
+        }
+      ],
+      "gene_phenotype_total": 147,
       "inheritance_models": [
         "de_novo"
       ],
@@ -1137,6 +1371,84 @@
           ]
         }
       },
+      "gene_phenotypes": [
+        {
+          "hpo_id": "HP:0001903",
+          "label": "Anemia",
+          "matches_case": true
+        },
+        {
+          "hpo_id": "HP:0002240",
+          "label": "Hepatomegaly",
+          "matches_case": true
+        },
+        {
+          "hpo_id": "HP:0004817",
+          "label": "Drug-sensitive hemolytic anemia",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0011905",
+          "label": "Reduced hemoglobin A",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0020059",
+          "label": "Increased red blood cell count",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0030058",
+          "label": "Sickled erythrocytes",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0031090",
+          "label": "Finger dactylitis",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0200023",
+          "label": "Priapism",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0005546",
+          "label": "Increased red cell osmotic resistance",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0011906",
+          "label": "Reduced beta/alpha synthesis ratio",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0045048",
+          "label": "Increased HbA2 hemoglobin",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0005511",
+          "label": "Heinz body anemia",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0011886",
+          "label": "Hyphema",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0011981",
+          "label": "Pigment gallstones",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0034280",
+          "label": "Target cells",
+          "matches_case": false
+        }
+      ],
+      "gene_phenotype_total": 139,
       "inheritance_models": [
         "ar_hom"
       ],
@@ -1473,6 +1785,84 @@
           ]
         }
       },
+      "gene_phenotypes": [
+        {
+          "hpo_id": "HP:0001903",
+          "label": "Anemia",
+          "matches_case": true
+        },
+        {
+          "hpo_id": "HP:0002240",
+          "label": "Hepatomegaly",
+          "matches_case": true
+        },
+        {
+          "hpo_id": "HP:0004817",
+          "label": "Drug-sensitive hemolytic anemia",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0011905",
+          "label": "Reduced hemoglobin A",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0020059",
+          "label": "Increased red blood cell count",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0030058",
+          "label": "Sickled erythrocytes",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0031090",
+          "label": "Finger dactylitis",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0200023",
+          "label": "Priapism",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0005546",
+          "label": "Increased red cell osmotic resistance",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0011906",
+          "label": "Reduced beta/alpha synthesis ratio",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0045048",
+          "label": "Increased HbA2 hemoglobin",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0005511",
+          "label": "Heinz body anemia",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0011886",
+          "label": "Hyphema",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0011981",
+          "label": "Pigment gallstones",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0034280",
+          "label": "Target cells",
+          "matches_case": false
+        }
+      ],
+      "gene_phenotype_total": 139,
       "inheritance_models": [
         "ar_hom"
       ],
@@ -1809,6 +2199,84 @@
           ]
         }
       },
+      "gene_phenotypes": [
+        {
+          "hpo_id": "HP:0001903",
+          "label": "Anemia",
+          "matches_case": true
+        },
+        {
+          "hpo_id": "HP:0002240",
+          "label": "Hepatomegaly",
+          "matches_case": true
+        },
+        {
+          "hpo_id": "HP:0032324",
+          "label": "Non-periodic recurrent fever",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0033188",
+          "label": "Cystic acne",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0033332",
+          "label": "Elevated circulating amyloid A concentration",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0020169",
+          "label": "Abnormal drug response",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0031236",
+          "label": "Predominantly dermal neutrophilic infiltrate",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0011944",
+          "label": "Small vessel vasculitis",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0025616",
+          "label": "Sterile abscess",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0045086",
+          "label": "Knee joint hypermobility",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0011118",
+          "label": "Abnormality of tumor necrosis factor secretion",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0011899",
+          "label": "Hyperfibrinogenemia",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0001055",
+          "label": "Erysipelas",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0032154",
+          "label": "Aphthous ulcer",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0001917",
+          "label": "Renal amyloidosis",
+          "matches_case": false
+        }
+      ],
+      "gene_phenotype_total": 164,
       "inheritance_models": [
         "ar_hom"
       ],
@@ -2131,6 +2599,84 @@
           ]
         }
       },
+      "gene_phenotypes": [
+        {
+          "hpo_id": "HP:0410179",
+          "label": "Decreased glucose-6-phosphate dehydrogenase level in blood",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0004814",
+          "label": "Fava bean-induced hemolytic anemia",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0020082",
+          "label": "Heinz bodies",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0003641",
+          "label": "Hemoglobinuria",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0008282",
+          "label": "Unconjugated hyperbilirubinemia",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0011273",
+          "label": "Anisocytosis",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0001923",
+          "label": "Reticulocytosis",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0001423",
+          "label": "X-linked dominant inheritance",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0004447",
+          "label": "Poikilocytosis",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0006579",
+          "label": "Prolonged neonatal jaundice",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0001974",
+          "label": "Increased total leukocyte count",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0000980",
+          "label": "Pallor",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0000952",
+          "label": "Jaundice",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0003596",
+          "label": "Middle age onset",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0002027",
+          "label": "Abdominal pain",
+          "matches_case": false
+        }
+      ],
+      "gene_phenotype_total": 22,
       "inheritance_models": [
         "het_inherited",
         "x_linked_recessive"
@@ -2468,6 +3014,84 @@
           ]
         }
       },
+      "gene_phenotypes": [
+        {
+          "hpo_id": "HP:0002910",
+          "label": "Elevated circulating hepatic transaminase concentration",
+          "matches_case": true
+        },
+        {
+          "hpo_id": "HP:0002240",
+          "label": "Hepatomegaly",
+          "matches_case": true
+        },
+        {
+          "hpo_id": "HP:0031289",
+          "label": "White papule",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0007407",
+          "label": "Excessive skin wrinkling on dorsum of hands and fingers",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0430121",
+          "label": "Seminal vesicle agenesis",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:6000725",
+          "label": "Salty tasting skin",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0032359",
+          "label": "Decreased forced expiratory flow 25-75%",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:6000100",
+          "label": "Hyperpolarized transepithelial nasal potential difference",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0005206",
+          "label": "Pancreatic pseudocyst",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0031248",
+          "label": "Palmar pruritus",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0011949",
+          "label": "Acute infectious pneumonia",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0100812",
+          "label": "Halitosis",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0025080",
+          "label": "Orthokeratotic hyperkeratosis",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0005213",
+          "label": "Pancreatic calcification",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0030877",
+          "label": "Reduced FEV1/FVC ratio",
+          "matches_case": false
+        }
+      ],
+      "gene_phenotype_total": 103,
       "inheritance_models": [
         "het_inherited",
         "comp_het"
@@ -2797,6 +3421,84 @@
           ]
         }
       },
+      "gene_phenotypes": [
+        {
+          "hpo_id": "HP:0002910",
+          "label": "Elevated circulating hepatic transaminase concentration",
+          "matches_case": true
+        },
+        {
+          "hpo_id": "HP:0002240",
+          "label": "Hepatomegaly",
+          "matches_case": true
+        },
+        {
+          "hpo_id": "HP:0031289",
+          "label": "White papule",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0007407",
+          "label": "Excessive skin wrinkling on dorsum of hands and fingers",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0430121",
+          "label": "Seminal vesicle agenesis",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:6000725",
+          "label": "Salty tasting skin",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0032359",
+          "label": "Decreased forced expiratory flow 25-75%",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:6000100",
+          "label": "Hyperpolarized transepithelial nasal potential difference",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0005206",
+          "label": "Pancreatic pseudocyst",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0031248",
+          "label": "Palmar pruritus",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0011949",
+          "label": "Acute infectious pneumonia",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0100812",
+          "label": "Halitosis",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0025080",
+          "label": "Orthokeratotic hyperkeratosis",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0005213",
+          "label": "Pancreatic calcification",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0030877",
+          "label": "Reduced FEV1/FVC ratio",
+          "matches_case": false
+        }
+      ],
+      "gene_phenotype_total": 103,
       "inheritance_models": [
         "het_inherited",
         "comp_het"
@@ -3112,6 +3814,84 @@
           ]
         }
       },
+      "gene_phenotypes": [
+        {
+          "hpo_id": "HP:0007465",
+          "label": "Honeycomb palmoplantar hyperkeratosis",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0031250",
+          "label": "Lip fissure",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0001128",
+          "label": "Trichiasis",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0004458",
+          "label": "Dilatated internal auditory canal",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0012844",
+          "label": "Trichilemmoma",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0031288",
+          "label": "Cobblestone-like hyperkeratosis",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0011859",
+          "label": "Punctate keratitis",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0008788",
+          "label": "Delayed pubic bone ossification",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0025610",
+          "label": "Posterior blepharitis",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0000381",
+          "label": "Stapes ankylosis",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0008038",
+          "label": "Aplastic/hypoplastic lacrimal glands",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0008138",
+          "label": "Equinus calcaneus",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0002555",
+          "label": "Absent pubic hair",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0032541",
+          "label": "Knuckle pad",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0032107",
+          "label": "Limbal stem cell deficiency",
+          "matches_case": false
+        }
+      ],
+      "gene_phenotype_total": 113,
       "inheritance_models": [
         "unresolved"
       ],
@@ -3426,6 +4206,84 @@
           ]
         }
       },
+      "gene_phenotypes": [
+        {
+          "hpo_id": "HP:0004661",
+          "label": "Frontalis muscle weakness",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0002872",
+          "label": "Apneic episodes precipitated by illness, fatigue, stress",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0003402",
+          "label": "Decreased miniature endplate potentials",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0030199",
+          "label": "Fatigable weakness of neck muscles",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0004889",
+          "label": "Intermittent episodes of respiratory insufficiency due to muscle weakness",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0011469",
+          "label": "Nasal regurgitation",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0012801",
+          "label": "Narrow jaw",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0003443",
+          "label": "Decreased size of nerve terminals",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0012515",
+          "label": "Hip flexor weakness",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0031108",
+          "label": "Triceps weakness",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0031374",
+          "label": "Ankle weakness",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0002882",
+          "label": "Sudden episodic apnea",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0030842",
+          "label": "Choking episodes",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0004885",
+          "label": "Episodic respiratory distress",
+          "matches_case": false
+        },
+        {
+          "hpo_id": "HP:0009077",
+          "label": "Weakness of long finger extensor muscles",
+          "matches_case": false
+        }
+      ],
+      "gene_phenotype_total": 105,
       "inheritance_models": [
         "het_inherited"
       ],

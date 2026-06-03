@@ -62,7 +62,7 @@ from variantgpt_engine.filter import filter_candidates, proband_carrier_filter  
 from variantgpt_engine.inheritance import assign_models, compound_het_pass  # noqa: E402
 from variantgpt_engine.joint import merge  # noqa: E402
 from variantgpt_engine.models import Build, CaseEmission, ClinicalHistory, GeneInfo, HPOTerm, Variant  # noqa: E402
-from variantgpt_engine.phenotype import PhenotypeScorer  # noqa: E402
+from variantgpt_engine.phenotype import PhenotypeScorer, gene_phenotype_terms  # noqa: E402
 from variantgpt_engine.preprocess import PreprocessConfig, preprocess_vcf  # noqa: E402
 from variantgpt_engine.prioritize import priority  # noqa: E402
 from variantgpt_engine.qc import compute_qc  # noqa: E402
@@ -680,6 +680,14 @@ async def _execute_job(job: dict[str, Any]) -> None:
                     scorer = PhenotypeScorer(hpo_ids, labels=hpo_labels)
                     hpo_hits = 0
                     for v in variants:
+                        # Gene's catalog phenotypes — populated for every
+                        # gene-bearing variant (independent of case overlap) so
+                        # the curator can still gauge clinical utility when none
+                        # of the case's HPO terms match the gene.
+                        gene_phenos, gene_pheno_total = gene_phenotype_terms(v.gene, hpo_ids)
+                        v.gene_phenotypes = gene_phenos
+                        v.gene_phenotype_total = gene_pheno_total
+
                         rel = scorer.score(v.gene)
                         if rel is None:
                             continue

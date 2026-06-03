@@ -159,6 +159,20 @@ class PhenotypeScore(BaseModel):
     matched_terms: list[PhenotypeTermContribution] = Field(default_factory=list)
 
 
+class GenePhenotype(BaseModel):
+    """One HPO term the variant's gene is associated with in the HPO
+    consortium genes_to_phenotype catalog — independent of the case's own
+    phenotype terms.
+
+    Surfaced so a curator can judge a variant's clinical utility even when
+    none of the case's recorded HPO terms overlap the gene (i.e. when
+    `phenotype_relevance` is empty). `matches_case` flags terms that also
+    appear in the case phenotype, so the UI can highlight the overlap."""
+    hpo_id: str
+    label: Optional[str] = None
+    matches_case: bool = False
+
+
 class PhenotypeRelevance(BaseModel):
     """Per-variant phenotype relevance under all three ranking algorithms.
     Precomputed in the engine against the case's HPO terms so the Analysis
@@ -239,6 +253,8 @@ class Variant(BaseModel):
     omim_id: Optional[str] = None                      # OMIM gene id (the * number)
     hpo_matches: list[str] = Field(default_factory=list)  # case HPO ids whose gene-association includes this variant's gene
     phenotype_relevance: Optional[PhenotypeRelevance] = None  # graded proximity under coverage/resnik/phrank
+    gene_phenotypes: list[GenePhenotype] = Field(default_factory=list)  # gene's HPO catalog associations (clinical-utility context, may be truncated)
+    gene_phenotype_total: int = 0  # total HPO associations for the gene (gene_phenotypes is the top slice)
     inheritance_models: list[InheritanceModel] = Field(default_factory=list)
     inheritance_confidence: Literal["high", "medium", "low"] = "medium"
     calls: list[MemberCall] = Field(default_factory=list)

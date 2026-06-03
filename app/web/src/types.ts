@@ -121,6 +121,15 @@ export interface PhenotypeRelevance {
   phrank: PhenotypeScore;
 }
 
+/** One HPO term the variant's gene is associated with in the HPO catalog,
+ *  independent of the case phenotype. Surfaced for clinical-utility context
+ *  even when phenotype_relevance is empty. */
+export interface GenePhenotype {
+  hpo_id: string;
+  label?: string;
+  matches_case: boolean;          // also one of the case's recorded HPO terms
+}
+
 export interface MemberCall {
   member_id: string;
   role: string;
@@ -146,6 +155,8 @@ export interface VariantRow {
   omim_id?: string;               // OMIM gene * number
   hpo_matches?: string[];         // case HPO ids whose gene-association includes this variant's gene
   phenotype_relevance?: PhenotypeRelevance | null;  // graded HPO proximity under 3 algorithms
+  gene_phenotypes?: GenePhenotype[];  // gene's HPO catalog associations (clinical-utility context)
+  gene_phenotype_total?: number;      // total HPO associations for the gene (gene_phenotypes is the top slice)
   inheritance_models: InheritanceModel[];
   inheritance_confidence?: "high" | "medium" | "low";
   calls?: MemberCall[];

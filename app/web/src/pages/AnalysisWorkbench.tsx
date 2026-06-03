@@ -189,6 +189,7 @@ export function AnalysisWorkbench() {
                   <th style={{ textAlign: "left" }}>Consequence</th>
                   <th style={{ width: 64 }}>Tier</th>
                   <th style={{ width: 150 }}>Relevance ({algoMeta.label})</th>
+                  <th style={{ textAlign: "left" }} title="HPO phenotypes the gene is associated with in the genes_to_phenotype catalog — shown for clinical-utility context even when none overlap the case phenotype">Gene phenotypes</th>
                 </tr>
               </thead>
               <tbody>
@@ -213,7 +214,7 @@ export function AnalysisWorkbench() {
                   );
                 })}
                 {rows.length === 0 ? (
-                  <tr><td colSpan={7} style={{ textAlign: "center", color: "var(--ink-soft)", padding: 24 }}>No shortlisted variants.</td></tr>
+                  <tr><td colSpan={8} style={{ textAlign: "center", color: "var(--ink-soft)", padding: 24 }}>No shortlisted variants.</td></tr>
                 ) : null}
               </tbody>
             </table>
@@ -259,10 +260,13 @@ function RankRow({
             <span style={{ fontSize: 11, color: "var(--ink-soft)" }}>{isOpen ? "▾" : "▸"}</span>
           </span>
         </td>
+        <td onClick={onToggleOpen}>
+          <GenePhenotypeCell phenotypes={v.gene_phenotypes ?? []} total={v.gene_phenotype_total ?? 0} />
+        </td>
       </tr>
       {isOpen ? (
         <tr>
-          <td colSpan={7} style={{ background: "var(--paper-2, #fafafa)", padding: "10px 16px 14px" }}>
+          <td colSpan={8} style={{ background: "var(--paper-2, #fafafa)", padding: "10px 16px 14px" }}>
             {matched.length === 0 ? (
               <p style={{ margin: 0, fontSize: 13, color: "var(--ink-soft)" }}>
                 {v.gene ?? "This gene"} has no recorded association with the case's HPO terms under this algorithm.
@@ -303,5 +307,61 @@ function RankRow({
         </tr>
       ) : null}
     </>
+  );
+}
+
+/** The gene's HPO catalog associations, independent of the case phenotype.
+ *  Shows the top few terms (case-matching ones highlighted) so a curator can
+ *  judge clinical utility even when the Relevance column is empty. */
+function GenePhenotypeCell({
+  phenotypes,
+  total,
+}: {
+  phenotypes: { hpo_id: string; label?: string; matches_case: boolean }[];
+  total: number;
+}) {
+  if (phenotypes.length === 0) {
+    return <span style={{ color: "var(--ink-soft)", fontSize: 12 }}>—</span>;
+  }
+  const SHOWN = 4;
+  const shown = phenotypes.slice(0, SHOWN);
+  const moreFromSlice = phenotypes.length - shown.length;
+  const moreTotal = Math.max(0, total - shown.length);
+  return (
+    <span style={{ display: "inline-flex", flexWrap: "wrap", gap: 4, maxWidth: 360 }}>
+      {shown.map((p) => (
+        <a
+          key={p.hpo_id}
+          href={`https://hpo.jax.org/browse/term/${p.hpo_id}`}
+          target="_blank"
+          rel="noreferrer"
+          title={`${p.hpo_id}${p.label ? ` · ${p.label}` : ""}${p.matches_case ? " — also a case phenotype" : ""}`}
+          onClick={(e) => e.stopPropagation()}
+          className="pill"
+          style={{
+            fontSize: 11,
+            textDecoration: "none",
+            background: p.matches_case ? "var(--primary-soft, #e0e7ff)" : "var(--paper-2, #f3f4f6)",
+            color: p.matches_case ? "var(--primary, #2563eb)" : "var(--ink-soft, #666)",
+            fontWeight: p.matches_case ? 600 : 400,
+            maxWidth: 170,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {p.label || p.hpo_id}
+        </a>
+      ))}
+      {moreTotal > 0 ? (
+        <span
+          className="mono"
+          style={{ fontSize: 11, color: "var(--ink-soft)", alignSelf: "center" }}
+          title={`${total} total HPO associations for this gene${moreFromSlice > 0 ? `; ${moreFromSlice} more in the top slice` : ""}`}
+        >
+          +{moreTotal} more
+        </span>
+      ) : null}
+    </span>
   );
 }

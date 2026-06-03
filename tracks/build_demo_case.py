@@ -19,7 +19,7 @@ sys.path.insert(0, str(ROOT / "engine" / "src"))
 from variantgpt_engine.acmg import augment_context_evidence  # noqa: E402
 from variantgpt_engine.annotation_sources import hpo_genes, hpo_ontology  # noqa: E402
 from variantgpt_engine.pedigree import load_ped  # noqa: E402
-from variantgpt_engine.phenotype import PhenotypeScorer  # noqa: E402
+from variantgpt_engine.phenotype import PhenotypeScorer, gene_phenotype_terms  # noqa: E402
 from variantgpt_engine.pipeline import run_case  # noqa: E402
 
 
@@ -35,9 +35,16 @@ async def _score_phenotype(emission) -> int:
     if not onto_ok:
         print("  hp.obo unavailable — demo relevance limited to coverage")
     labels = {h.hpo_id: h.label for h in emission.hpo if h.label}
-    scorer = PhenotypeScorer([h.hpo_id for h in emission.hpo], labels=labels)
+    case_hpo_ids = [h.hpo_id for h in emission.hpo]
+    scorer = PhenotypeScorer(case_hpo_ids, labels=labels)
     n = 0
     for v in emission.variants:
+        # Gene's catalog phenotypes for clinical-utility context, regardless
+        # of whether any case HPO term overlaps the gene.
+        gene_phenos, gene_pheno_total = gene_phenotype_terms(v.gene, case_hpo_ids)
+        v.gene_phenotypes = gene_phenos
+        v.gene_phenotype_total = gene_pheno_total
+
         rel = scorer.score(v.gene)
         if rel is None:
             continue

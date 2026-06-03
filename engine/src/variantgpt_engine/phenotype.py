@@ -23,7 +23,51 @@ from __future__ import annotations
 from typing import Optional
 
 from .annotation_sources import hpo_genes, hpo_ontology
-from .models import PhenotypeRelevance, PhenotypeScore, PhenotypeTermContribution
+from .models import (
+    GenePhenotype,
+    PhenotypeRelevance,
+    PhenotypeScore,
+    PhenotypeTermContribution,
+)
+
+
+def gene_phenotype_terms(
+    gene: Optional[str],
+    case_hpo_ids: Optional[list[str]] = None,
+    limit: int = 15,
+) -> tuple[list[GenePhenotype], int]:
+    """The HPO terms a gene is associated with in the genes_to_phenotype
+    catalog, for clinical-utility context independent of the case phenotype.
+
+    Returns (top_slice, total). The slice is capped at `limit` and ordered so
+    that terms also present in the case phenotype come first, then by
+    descending information content (most specific/informative first) when the
+    ontology is loaded. `total` is the gene's full association count so the UI
+    can show "+N more". Returns ([], 0) when the gene has no associations."""
+    if not gene or not hpo_genes._Lazy.loaded:
+        return [], 0
+    terms = hpo_genes._Lazy.gene_to_hpo.get(gene)
+    if not terms:
+        return [], 0
+    case_set = set(case_hpo_ids or [])
+    onto = hpo_ontology.is_loaded()
+    ordered = sorted(
+        terms,
+        key=lambda t: (
+            t not in case_set,  # case-matching terms first
+            -(hpo_ontology.ic_of(t) if onto else 0.0),  # then most specific
+            t,  # stable tiebreak
+        ),
+    )
+    out = [
+        GenePhenotype(
+            hpo_id=t,
+            label=hpo_ontology.label(t) if onto else None,
+            matches_case=t in case_set,
+        )
+        for t in ordered[:limit]
+    ]
+    return out, len(terms)
 
 
 def _norm_contributions(

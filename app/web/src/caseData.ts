@@ -93,6 +93,8 @@ interface EngineVariant {
     resnik: EnginePhenotypeScore;
     phrank: EnginePhenotypeScore;
   } | null;
+  gene_phenotypes?: { hpo_id: string; label?: string | null; matches_case?: boolean }[] | null;
+  gene_phenotype_total?: number | null;
   calls?: {
     member_id: string;
     role: string;
@@ -186,6 +188,12 @@ function adaptVariant(ev: EngineVariant, proposal?: EngineProposal): VariantRow 
           phrank: adaptPhenoScore(ev.phenotype_relevance.phrank),
         }
       : null,
+    gene_phenotypes: (ev.gene_phenotypes ?? []).map((p) => ({
+      hpo_id: p.hpo_id,
+      label: p.label ?? undefined,
+      matches_case: p.matches_case ?? false,
+    })),
+    gene_phenotype_total: ev.gene_phenotype_total ?? 0,
     inheritance_models: ev.inheritance_models as InheritanceModel[],
     inheritance_confidence: (ev.inheritance_confidence as "high" | "medium" | "low" | undefined) ?? undefined,
     calls: ev.calls ? ev.calls.map((c) => ({
