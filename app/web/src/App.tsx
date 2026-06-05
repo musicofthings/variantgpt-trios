@@ -1,4 +1,4 @@
-import { NavLink, Route, Routes } from "react-router-dom";
+import { Navigate, NavLink, Route, Routes } from "react-router-dom";
 import { Home } from "./pages/Home";
 import { Dashboard } from "./pages/Dashboard";
 import { Intake } from "./pages/Intake";
@@ -34,6 +34,10 @@ export function App() {
             <Route path="/cases/:caseId/report" element={<Report />} />
             <Route path="/cases/:caseId/diff" element={<Diff />} />
             <Route path="/tracks" element={<TracksStub />} />
+            {/* Catch-all: any unmatched path (e.g. a Clerk SSO callback route,
+                a stale bookmark, or a hard refresh on an unknown URL) lands on
+                Home instead of rendering a blank <main>. */}
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>
       </div>

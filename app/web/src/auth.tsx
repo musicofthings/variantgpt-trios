@@ -52,7 +52,16 @@ export function AuthGate({ children }: { children: ReactNode }) {
   }
 
   return (
-    <ClerkProvider publishableKey={PUBLISHABLE_KEY}>
+    // After sign-in / sign-up, land on the app home ("/") rather than whatever
+    // Clerk-internal URL the hosted flow returned to (which our router doesn't
+    // serve, leaving <main> blank). These fallbacks only apply when there's no
+    // explicit redirect_url already in play.
+    <ClerkProvider
+      publishableKey={PUBLISHABLE_KEY}
+      signInFallbackRedirectUrl="/"
+      signUpFallbackRedirectUrl="/"
+      afterSignOutUrl="/"
+    >
       <SignedIn>
         <TokenBridge />
         {children}

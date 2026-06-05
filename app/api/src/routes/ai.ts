@@ -27,7 +27,7 @@ export const aiRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>()
 
 const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
-const DEFAULT_MODEL = "claude-3-5-haiku-latest";
+const DEFAULT_MODEL = "claude-haiku-4-5";
 const MAX_TOKENS = 800;
 // Cap input prose to keep request payload bounded — Anthropic accepts up to
 // ~200k tokens but the synopsis only needs the variant + case scaffolding;
@@ -121,7 +121,16 @@ aiRouter.post("/synopsis", async (c) => {
       body: JSON.stringify({
         model,
         max_tokens: MAX_TOKENS,
-        system: SYSTEM_PROMPT,
+        // Cache the stable system prompt so repeated synopsis calls in a
+        // session reuse the prefix. Render order is system -> messages, and the
+        // per-variant prompt lives in `messages` (after the breakpoint), so it
+        // never invalidates the cached system block. NOTE: Haiku 4.5's minimum
+        // cacheable prefix is ~4096 tokens — this SYSTEM_PROMPT is far shorter,
+        // so `usage.cache_*` will read 0 until the cached prefix grows past
+        // that floor. The breakpoint is correct and free to leave in place.
+        system: [
+          { type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } },
+        ],
         messages: [{ role: "user", content: prompt }],
       }),
     });
@@ -174,7 +183,7 @@ aiRouter.post("/synopsis", async (c) => {
  * The result is a *suggestion* list for the curator to accept in Intake — never
  * auto-applied.
  */
-const HPO_MODEL_FALLBACK = "claude-3-5-haiku-latest";
+const HPO_MODEL_FALLBACK = "claude-haiku-4-5";
 const MAX_EXTRACT_CHARS = 6000;
 const MAX_PHRASES = 25;
 
