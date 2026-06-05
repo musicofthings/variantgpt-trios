@@ -15,7 +15,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useDemoCase } from "../caseData";
 import { TierChip } from "../components/TierChip";
-import type { PhenotypeAlgorithm, VariantRow } from "../types";
+import type { PhenotypeAlgorithm, Tier, VariantRow } from "../types";
 import {
   DEFAULT_PHENO_ALGO, PHENO_ALGORITHMS, PhenotypeBar, phenoPercent, phenoScore,
 } from "../phenotype";
@@ -35,6 +35,11 @@ export function AnalysisWorkbench() {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [seeded, setSeeded] = useState(false);
 
+  // Stackable filters on the curated list. Empty tier set = all tiers;
+  // minRel = 0 means no phenotype-relevance floor. Both apply together (AND).
+  const [tierFilter, setTierFilter] = useState<Set<Tier>>(new Set());
+  const [minRel, setMinRel] = useState<number>(0);
+
   // The shortlist carried over from the Workbench.
   const shortlist = useMemo(() => (caseId ? readIdSet(SELECTION_KEY(caseId)) : new Set<string>()), [caseId]);
 
@@ -45,6 +50,39 @@ export function AnalysisWorkbench() {
     const list = data.variants.filter((v) => shortlist.has(v.id));
     return [...list].sort((a, b) => phenoPercent(b, algo) - phenoPercent(a, algo));
   }, [data, shortlist, algo]);
+
+  // Per-tier counts over the shortlist, for the filter chips.
+  const tierCounts = useMemo(() => {
+    const c: Record<Tier, number> = { P: 0, LP: 0, VUS: 0, LB: 0, B: 0 };
+    for (const v of rows) c[v.baseline_tier] = (c[v.baseline_tier] ?? 0) + 1;
+    return c;
+  }, [rows]);
+
+  // The rows actually shown = shortlist passed through both filters. Filtering
+  // is display-only; it never deselects a variant already ticked for the report.
+  const visibleRows = useMemo(
+    () => rows.filter((v) => {
+      if (tierFilter.size > 0 && !tierFilter.has(v.baseline_tier)) return false;
+      // Compare against the rounded percent the cell displays, so a row shown
+      // as "70%" isn't dropped by a "≥70%" filter due to sub-integer rounding.
+      if (minRel > 0 && Math.round(phenoPercent(v, algo)) < minRel) return false;
+      return true;
+    }),
+    [rows, tierFilter, minRel, algo],
+  );
+
+  function toggleTier(t: Tier) {
+    setTierFilter((prev) => {
+      const next = new Set(prev);
+      if (next.has(t)) next.delete(t); else next.add(t);
+      return next;
+    });
+  }
+  function clearFilters() {
+    setTierFilter(new Set());
+    setMinRel(0);
+  }
+  const filtersActive = tierFilter.size > 0 || minRel > 0;
 
   // Seed the final set from the shortlist once the case has loaded (or from a
   // previously-saved final selection if the analyst has been here before).
@@ -71,6 +109,21 @@ export function AnalysisWorkbench() {
       return next;
     });
   }
+  // Wipe the report selection so the curator can start a fresh pick. The
+  // persisted FINAL_KEY follows via the write effect on `final`.
+  function clearList() {
+    setFinal(new Set());
+  }
+  // Add every currently-visible (filtered) row to the report selection — pairs
+  // with the filters so a curator can, e.g., filter to "P/LP + ≥70%" and grab
+  // the whole set in one click after clearing.
+  function selectShown() {
+    setFinal((prev) => {
+      const next = new Set(prev);
+      for (const v of visibleRows) next.add(v.id);
+      return next;
+    });
+  }
 
   if (loading) return <div className="card">Loading case…</div>;
   if (error || !data) {
@@ -92,6 +145,14 @@ export function AnalysisWorkbench() {
         <span className="pill mono">{caseId}</span>
         <span className="pill">{rows.length} shortlisted</span>
         <span className="pill">{final.size} for report</span>
+        {final.size > 0 ? (
+          <button
+            onClick={clearList}
+            title="Clear all variants selected for the report so you can pick a fresh list"
+          >
+            Clear list
+          </button>
+        ) : null}
         <Link to={`/cases/${caseId}`}><button>← Back to workbench</button></Link>
         <button
           className="primary"
@@ -177,6 +238,88 @@ export function AnalysisWorkbench() {
             </div>
           </section>
 
+          {/* Stackable filters on the curated list — ACMG tier (multi-select)
+              + a phenotype-relevance floor. They combine (AND) and are
+              display-only, so ticked variants stay selected even when hidden. */}
+          <section className="card" style={{ marginBottom: 16, display: "flex", flexWrap: "wrap", gap: 20, alignItems: "center" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 12, color: "var(--ink-soft)", fontWeight: 600 }}>ACMG tier</span>
+              {(["P", "LP", "VUS", "LB", "B"] as Tier[]).map((t) => {
+                const on = tierFilter.has(t);
+                const n = tierCounts[t];
+                return (
+                  <button
+                    key={t}
+                    onClick={() => toggleTier(t)}
+                    aria-pressed={on}
+                    disabled={n === 0 && !on}
+                    title={`${on ? "Hide" : "Show"} ${t} variants (${n})`}
+                    style={{
+                      fontSize: 12,
+                      padding: "3px 10px",
+                      borderRadius: 999,
+                      border: `1px solid ${on ? "var(--primary)" : "var(--line)"}`,
+                      background: on ? "var(--primary-soft)" : "var(--paper)",
+                      color: on ? "var(--primary)" : "var(--ink)",
+                      fontWeight: on ? 600 : 400,
+                      cursor: n === 0 && !on ? "not-allowed" : "pointer",
+                      opacity: n === 0 && !on ? 0.4 : 1,
+                    }}
+                  >
+                    {t} <span style={{ color: "var(--ink-soft)" }}>{n}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 12, color: "var(--ink-soft)", fontWeight: 600 }}>
+                Phenotype relevance
+              </span>
+              <div role="radiogroup" aria-label="Minimum phenotype relevance" style={{ display: "inline-flex", border: "1px solid var(--line)", borderRadius: 8, overflow: "hidden" }}>
+                {[{ v: 0, label: "Any" }, { v: 40, label: "≥40%" }, { v: 70, label: "≥70%" }].map((opt) => (
+                  <button
+                    key={opt.v}
+                    role="radio"
+                    aria-checked={minRel === opt.v}
+                    onClick={() => setMinRel(opt.v)}
+                    style={{
+                      border: "none",
+                      borderRight: "1px solid var(--line)",
+                      padding: "4px 12px",
+                      fontSize: 12,
+                      cursor: "pointer",
+                      background: minRel === opt.v ? "var(--primary-soft)" : "var(--paper)",
+                      color: minRel === opt.v ? "var(--primary)" : "var(--ink)",
+                      fontWeight: minRel === opt.v ? 600 : 400,
+                    }}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>
+                {visibleRows.length} of {rows.length} shown
+              </span>
+              {filtersActive ? (
+                <button onClick={clearFilters} style={{ fontSize: 12 }} title="Reset tier + relevance filters">
+                  Clear filters
+                </button>
+              ) : null}
+              <button
+                onClick={selectShown}
+                disabled={visibleRows.length === 0}
+                style={{ fontSize: 12 }}
+                title="Add all currently-shown variants to the report selection"
+              >
+                Select shown
+              </button>
+            </div>
+          </section>
+
           {/* Ranked shortlist */}
           <div className="card" style={{ padding: 0, overflow: "hidden" }}>
             <table className="table">
@@ -193,7 +336,7 @@ export function AnalysisWorkbench() {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((v, i) => {
+                {visibleRows.map((v, i) => {
                   const score = phenoScore(v, algo);
                   const pct = phenoPercent(v, algo);
                   const isOpen = expanded === v.id;
@@ -213,8 +356,10 @@ export function AnalysisWorkbench() {
                     />
                   );
                 })}
-                {rows.length === 0 ? (
-                  <tr><td colSpan={8} style={{ textAlign: "center", color: "var(--ink-soft)", padding: 24 }}>No shortlisted variants.</td></tr>
+                {visibleRows.length === 0 ? (
+                  <tr><td colSpan={8} style={{ textAlign: "center", color: "var(--ink-soft)", padding: 24 }}>
+                    {rows.length === 0 ? "No shortlisted variants." : "No variants match the current filters."}
+                  </td></tr>
                 ) : null}
               </tbody>
             </table>
