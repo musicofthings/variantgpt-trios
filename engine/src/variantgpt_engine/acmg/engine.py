@@ -52,6 +52,26 @@ def tier_for(points: int, t: Thresholds = DEFAULT_THRESHOLDS, ba1: bool = False)
     return "VUS"
 
 
+def _reconcile_insilico(ledger: list[EvidenceItem]) -> None:
+    """Prevent in-silico double-counting (Pejaver et al. / ClinGen SVI).
+
+    PP3 already captures the strong predictor signal; PM1's predictor-concordance
+    proxy fires on the same scores. When PP3 has escalated to Strong from
+    predictors, suppress PM1 so a single in-silico signal can't contribute both
+    +4 and +2 (which alone would reach the LP band). PM1 still stands on its own
+    when PP3 only fired at Supporting (or not at all)."""
+    by = {e.criterion: e for e in ledger}
+    pp3 = by.get("PP3")
+    pm1 = by.get("PM1")
+    if (pp3 and pp3.fired and pp3.strength == "S"
+            and pm1 and pm1.fired and pm1.source == "predictors_strong_concordance"):
+        idx = ledger.index(pm1)
+        ledger[idx] = EvidenceItem(
+            criterion="PM1", fired=False, source="suppressed",
+            detail="suppressed: predictor signal already counted by PP3 (Strong) — no in-silico double-count",
+        )
+
+
 def classify(variant: Variant, t: Thresholds = DEFAULT_THRESHOLDS) -> tuple[Tier, int, list[EvidenceItem]]:
     """Run every registered criterion against the variant, return (tier, points, ledger).
 
@@ -59,16 +79,17 @@ def classify(variant: Variant, t: Thresholds = DEFAULT_THRESHOLDS) -> tuple[Tier
     panel needs the full set to render "considered but not fired" rows.
     """
     ledger: list[EvidenceItem] = []
-    total = 0
-    ba1 = False
     for name, fn in CRITERION_REGISTRY.items():
         item = fn(variant)
-        if item is None:
-            ledger.append(EvidenceItem(criterion=name, fired=False))
-            continue
-        ledger.append(item)
+        ledger.append(item if item is not None else EvidenceItem(criterion=name, fired=False))
+
+    _reconcile_insilico(ledger)
+
+    total = 0
+    ba1 = False
+    for item in ledger:
         if item.fired:
             total += item.points
-            if name == "BA1":
+            if item.criterion == "BA1":
                 ba1 = True
     return tier_for(total, t, ba1=ba1), total, ledger

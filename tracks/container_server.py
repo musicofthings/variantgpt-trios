@@ -53,6 +53,7 @@ sys.path.insert(0, str(THIS.parents[1] / "engine" / "src"))
 
 from variantgpt_engine.pedigree import load_ped  # noqa: E402
 from variantgpt_engine.acmg import augment_context_evidence, classify  # noqa: E402
+from variantgpt_engine.acmg.concordance import assess_all, assess_svs  # noqa: E402
 from variantgpt_engine.annotation import AnnotationContext, annotate  # noqa: E402
 from variantgpt_engine.annotation_sources import clinvar_aa, genomeasia, hpo_genes, hpo_ontology, indigenomes, mygene, myvariant, vep_rest  # noqa: E402
 from variantgpt_engine.annotation_sources.csq import pick_canonical  # noqa: E402
@@ -61,7 +62,10 @@ from variantgpt_engine.build_detect import detect_build  # noqa: E402
 from variantgpt_engine.filter import filter_candidates, proband_carrier_filter  # noqa: E402
 from variantgpt_engine.inheritance import assign_models, compound_het_pass  # noqa: E402
 from variantgpt_engine.joint import merge  # noqa: E402
-from variantgpt_engine.models import Build, CaseEmission, ClinicalHistory, GeneInfo, HPOTerm, Variant  # noqa: E402
+from variantgpt_engine.models import Build, CaseEmission, ClinicalHistory, GeneInfo, HPOTerm, StructuralVariant, Variant  # noqa: E402
+from variantgpt_engine.bam_calling import call_all as call_bams  # noqa: E402
+from variantgpt_engine.sv_pipeline import run_sv_from_annotsv  # noqa: E402
+from variantgpt_engine import sv_calling  # noqa: E402
 from variantgpt_engine.phenotype import PhenotypeScorer, gene_phenotype_terms  # noqa: E402
 from variantgpt_engine.preprocess import PreprocessConfig, preprocess_vcf  # noqa: E402
 from variantgpt_engine.prioritize import priority  # noqa: E402
@@ -70,10 +74,6 @@ from variantgpt_engine.reclassify import reclassify_all  # noqa: E402
 from run_uploaded_case import _build_ped, _ensure_uncompressed_vcf, _find_member  # noqa: E402
 
 
-# Demo data has 11 variants; clinical exomes have ~250k post-merge; WGS up to 5M.
-# We use this threshold to switch from "demo-data overlay" to "live annotation"
-# mode automatically — no UI flag, just the size of the input determines the path.
-DEMO_MODE_THRESHOLD = 100
 # After the rare-variant + benign-consequence filter, we cap further work at
 # this many candidates. Typical exome filters down to ~3-5k; WGS to ~5-10k.
 MAX_VARIANTS_AFTER_FILTER = 10000
@@ -176,6 +176,115 @@ async def _execute_job(job: dict[str, Any]) -> None:
             workdir = Path(tmp)
             emit(f"workdir={workdir}")
 
+            # Local AnnotSV TSV produced by gCNV from BAMs (set in the BAM block
+            # below when a gCNV cohort-model bundle is provided). Falls back to a
+            # Worker-supplied sv_annotsv_url in the SV classification section.
+            sv_tsv_local: Optional[Path] = None
+
+            # 0. Aligned-reads path: if the job carries bam_urls, download the
+            #    BAM/CRAM + reference and call per-member VCFs with GATK best
+            #    practices (bam_calling.call_all). The produced VCFs are dropped
+            #    into the workdir under the manifest filename so the existing
+            #    download/preprocess/merge flow below treats them identically to
+            #    uploaded VCFs. Requires reference_url (+ .fai/.dict).
+            bam_urls: dict[str, str] = job.get("bam_urls") or {}
+            if bam_urls:
+                reference_url = job.get("reference_url")
+                if not reference_url:
+                    raise RuntimeError("bam_urls supplied but no reference_url for GATK calling")
+                emit(f"BAM calling: {len(bam_urls)} sample(s) via GATK best practices")
+                refdir = workdir / "ref"
+                refdir.mkdir(parents=True, exist_ok=True)
+                ref_path = refdir / "reference.fasta"
+                async with httpx.AsyncClient(timeout=600.0, follow_redirects=True) as client:
+                    async def _dl(url: str, dst: Path) -> None:
+                        async with client.stream("GET", url) as r:
+                            r.raise_for_status()
+                            with open(dst, "wb") as fh:
+                                async for chunk in r.aiter_bytes():
+                                    fh.write(chunk)
+                    await _dl(reference_url, ref_path)
+                    if job.get("reference_fai_url"):
+                        await _dl(job["reference_fai_url"], refdir / "reference.fasta.fai")
+                    if job.get("reference_dict_url"):
+                        await _dl(job["reference_dict_url"], refdir / "reference.dict")
+                    ks_paths: list[Path] = []
+                    for i, ks_url in enumerate(job.get("known_sites_urls") or []):
+                        ks_dst = refdir / f"known_sites_{i}.vcf.gz"
+                        await _dl(ks_url, ks_dst)
+                        ks_paths.append(ks_dst)
+                    bam_paths: dict[str, Path] = {}
+                    for role, url in bam_urls.items():
+                        ext = ".cram" if str(url).lower().split("?")[0].endswith(".cram") else ".bam"
+                        dst = workdir / f"{role}{ext}"
+                        emit(f"download BAM role={role} -> {dst.name}")
+                        await _dl(url, dst)
+                        bam_paths[role] = dst
+                emit("GATK: MarkDuplicates → (BQSR) → HaplotypeCaller → GenotypeGVCFs")
+                called = await asyncio.to_thread(
+                    call_bams, bam_paths, ref_path, workdir / "gatk",
+                    known_sites=ks_paths or None, intervals=None,
+                )
+                manifest.setdefault("files", {})
+                for role, called_vcf in called.items():
+                    fname = f"{role}.vcf.gz"
+                    target = workdir / fname
+                    if called_vcf.resolve() != target.resolve():
+                        target.write_bytes(called_vcf.read_bytes())
+                    manifest["files"][role] = fname
+                    # Mark as already-local so the R2 download loop skips it.
+                    vcf_urls.pop(role, None)
+                emit(f"GATK calling done: {len(called)} VCF(s) produced")
+
+                # gCNV → AnnotSV: when a prebuilt cohort-model bundle is provided,
+                # call germline CNVs from the proband BAM (GATK gCNV CASE mode) and
+                # annotate with AnnotSV. Produces the TSV the SV classifier
+                # consumes. Best-effort — a failure never blocks the SNV pipeline.
+                gcnv_model_url = job.get("gcnv_model_url")
+                gcnv_intervals_url = job.get("gcnv_intervals_url")
+                if gcnv_model_url and gcnv_intervals_url:
+                    try:
+                        proband_role = next(
+                            (m["role"] for m in manifest["pedigree"]
+                             if m["role"] == "proband" and not m.get("missing")),
+                            None,
+                        )
+                        proband_bam = bam_paths.get(proband_role) if proband_role else None
+                        if proband_bam is None:
+                            emit("gCNV: no proband BAM available — skipping CNV calling")
+                        else:
+                            svdir = workdir / "sv"
+                            svdir.mkdir(parents=True, exist_ok=True)
+                            model_tgz = svdir / "gcnv_model.tgz"
+                            intervals_path = svdir / "intervals.interval_list"
+                            async with httpx.AsyncClient(timeout=600.0, follow_redirects=True) as client:
+                                async def _dl_sv(url: str, dst: Path) -> None:
+                                    async with client.stream("GET", url) as r:
+                                        r.raise_for_status()
+                                        with open(dst, "wb") as fh:
+                                            async for chunk in r.aiter_bytes():
+                                                fh.write(chunk)
+                                await _dl_sv(gcnv_model_url, model_tgz)
+                                await _dl_sv(gcnv_intervals_url, intervals_path)
+                            emit("gCNV: extracting cohort-model bundle")
+                            model_dir = await asyncio.to_thread(
+                                sv_calling.extract_model_bundle, model_tgz, svdir / "model",
+                            )
+                            # PON-build bundle layout: model/ploidy-model + model/cnv-model.
+                            ploidy_model = model_dir / "ploidy-model"
+                            cnv_model = model_dir / "cnv-model"
+                            build_str = job.get("genome_build", "GRCh38")
+                            emit("gCNV: CollectReadCounts → GermlineCNVCaller (CASE) → AnnotSV")
+                            sv_tsv_local = await asyncio.to_thread(
+                                sv_calling.call_svs_from_bam,
+                                proband_bam, ref_path, intervals_path,
+                                ploidy_model, cnv_model, svdir,
+                                sample_id=proband_role, genome_build=build_str,
+                            )
+                            emit(f"gCNV: AnnotSV TSV produced -> {sv_tsv_local.name}")
+                    except Exception as e:  # noqa: BLE001
+                        emit(f"gCNV: SV calling failed (continuing without): {type(e).__name__}: {e}")
+
             # 1. Download each uploaded VCF from its signed R2 URL.
             async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
                 for role, url in vcf_urls.items():
@@ -258,12 +367,11 @@ async def _execute_job(job: dict[str, Any]) -> None:
             emit(f"merged: {len(joint)} joint variants")
             await post_status("running")
 
-            # Determine pipeline mode by input size. Small inputs route through
-            # the curated demo-annotation overlay; everything else hits the live
-            # annotation stack (VCF CSQ → VEP REST → gnomAD live).
-            real_mode = len(joint) > DEMO_MODE_THRESHOLD
+            # Always live annotation — no demo/dummy overlay. Every case routes
+            # through the live stack (VCF CSQ → VEP REST → gnomAD/myvariant.info).
+            real_mode = True
             csq_count = sum(1 for jv in joint if jv.csq)
-            emit(f"mode={'real' if real_mode else 'demo'} csq_annotated={csq_count}")
+            emit(f"mode=live csq_annotated={csq_count}")
 
             emit("computing QC")
             qc = await asyncio.to_thread(compute_qc, joint, pedigree)
@@ -445,8 +553,6 @@ async def _execute_job(job: dict[str, Any]) -> None:
                 await post_status("running")
 
             track_versions = {"engine": "0.1.0"}
-            if not real_mode:
-                track_versions["demo_dataset"] = "v1"
             ctx = AnnotationContext(
                 build=resolved_build.value,
                 track_versions=track_versions,
@@ -460,7 +566,6 @@ async def _execute_job(job: dict[str, Any]) -> None:
                 # only duplicates that work and gets overwritten.
                 use_gnomad=False,
                 gnomad_timeout=5.0,
-                use_demo_annotations=not real_mode,
             )
 
             # Do the entire annotate→classify→priority sweep in a single
@@ -772,6 +877,47 @@ async def _execute_job(job: dict[str, Any]) -> None:
                 reclassify_all, variants, snapshot_versions=track_versions
             )
 
+            # Engine-vs-ClinVar concordance — flags discordant calls (e.g. engine
+            # LP vs a ≥2★ ClinVar Benign) for curator review. Never overrides.
+            n_disc = await asyncio.to_thread(assess_all, variants)
+            emit(f"ClinVar concordance: {n_disc} discordant SNV(s) flagged")
+
+            # Structural / copy-number variants. Two sources, in priority order:
+            #   1. sv_tsv_local — AnnotSV TSV we just produced from the BAMs via
+            #      gCNV (the BAM block above), or
+            #   2. sv_annotsv_url — a pre-computed AnnotSV TSV the Worker signed
+            #      (SVs called outside this run).
+            # Either way we parse + classify (ClinGen 2019) and reconcile against
+            # ClinVar-SV. No-op when neither source is present.
+            structural_variants: list[StructuralVariant] = []
+            sv_tsv: Optional[Path] = sv_tsv_local
+            sv_annotsv_url = job.get("sv_annotsv_url")
+            if sv_tsv is None and sv_annotsv_url:
+                try:
+                    sv_tsv = workdir / "annotsv.tsv"
+                    async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
+                        async with client.stream("GET", sv_annotsv_url) as r:
+                            r.raise_for_status()
+                            with open(sv_tsv, "wb") as fh:
+                                async for chunk in r.aiter_bytes():
+                                    fh.write(chunk)
+                except Exception as e:  # noqa: BLE001
+                    emit(f"SV/CNV: AnnotSV TSV download failed (continuing without): {type(e).__name__}: {e}")
+                    sv_tsv = None
+            if sv_tsv is not None:
+                emit("SV/CNV: classifying (ClinGen 2019) + ClinVar-SV reconciliation")
+                try:
+                    structural_variants = await asyncio.to_thread(
+                        run_sv_from_annotsv, sv_tsv, pedigree, None
+                    )
+                    await asyncio.to_thread(assess_svs, structural_variants)
+                    if structural_variants:
+                        track_versions["sv_classifier"] = "clingen-2019"
+                    p_sv = sum(1 for sv in structural_variants if sv.tier in ("P", "LP"))
+                    emit(f"SV/CNV: classified {len(structural_variants)} SV(s), {p_sv} P/LP")
+                except Exception as e:  # noqa: BLE001
+                    emit(f"SV/CNV: classification failed (continuing without): {type(e).__name__}: {e}")
+
             # Clinical history block — passed verbatim from Intake. All
             # fields optional; we still emit the object so the SPA's report
             # layout stays stable.
@@ -796,10 +942,14 @@ async def _execute_job(job: dict[str, Any]) -> None:
                 qc=qc,
                 gene_info=gene_info_map,
                 variants=variants,
+                structural_variants=structural_variants,
                 proposals=proposals,
                 versions=track_versions,
             )
-            emit(f"variants={len(emission.variants)} proposals={len(emission.proposals)}")
+            emit(
+                f"variants={len(emission.variants)} svs={len(emission.structural_variants)} "
+                f"proposals={len(emission.proposals)}"
+            )
             await post_status("running")
 
             # 4. Upload case.json to R2 via the signed PUT.

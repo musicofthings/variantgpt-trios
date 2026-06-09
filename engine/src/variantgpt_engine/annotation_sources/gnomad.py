@@ -91,14 +91,22 @@ def lookup(
     if payload.get("errors"):
         log.debug("gnomAD returned errors for %s: %s", vid, payload["errors"])
 
-    variant = (payload.get("data") or {}).get("variant")
-    if not variant:
+    # Distinguish "API responded, variant absent from gnomAD" from a transport
+    # failure: a successful response with `variant: null` means true absence
+    # (allele count 0 across gnomAD) — strong PM2 support — so we emit an
+    # explicit af=0 row. Transport/parse failures returned [] earlier, so a
+    # *missing* row downstream unambiguously means "gnomAD was not consulted."
+    if "data" in payload:
+        variant = (payload.get("data") or {}).get("variant")
+        if not variant:
+            return [PopulationAF(source="gnomad_v4_global", ac=0, an=None, af=0.0)]
+    else:
         return []
 
     # Prefer 'joint' (exomes + genomes); fall back to 'exome' alone if joint missing.
     src = variant.get("joint") or variant.get("exome")
     if not src:
-        return []
+        return [PopulationAF(source="gnomad_v4_global", ac=0, an=None, af=0.0)]
 
     global_ac = src.get("ac")
     global_an = src.get("an")

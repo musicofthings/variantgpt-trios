@@ -225,6 +225,24 @@ class ClinVarRecord(BaseModel):
     variation_id: Optional[str] = None                 # ClinVar Variation accession (e.g. "VCV000017604")
 
 
+class ClinVarConcordance(BaseModel):
+    """Reconciliation between the engine's computed tier and ClinVar's own
+    assertion (PRD §4.5). ClinGen SVI retired blanket trust in ClinVar (the old
+    PP5/BP6), so this is a *surfacing/curation gate*, not a points injection:
+    a high-confidence ClinVar classification that contradicts the engine is
+    flagged for the curator, never silently overrides the auto-tier."""
+    status: Literal[
+        "concordant",      # engine tier agrees with ClinVar direction
+        "discordant",      # engine pathogenic vs ClinVar benign (or vice versa), ClinVar high-confidence
+        "uninformative",   # ClinVar present but VUS / conflicting / low review stars
+    ]
+    engine_tier: Optional["Tier"] = None
+    clinvar_tier: Optional["Tier"] = None             # ClinVar significance mapped onto our tier scale
+    clinvar_significance: Optional[str] = None         # raw ClinVar string
+    review_stars: Optional[int] = None
+    note: str = ""
+
+
 class MemberCall(BaseModel):
     """Per-member genotype call summary projected onto the Variant model
     so the clinical drawer can show zygosity / depth / allele balance per
@@ -261,6 +279,7 @@ class Variant(BaseModel):
     populations: list[PopulationAF] = Field(default_factory=list)
     predictors: PredictorScores = Field(default_factory=PredictorScores)
     clinvar: Optional[ClinVarRecord] = None
+    clinvar_concordance: Optional[ClinVarConcordance] = None  # engine-vs-ClinVar reconciliation (PRD §4.5)
     evidence: list[EvidenceItem] = Field(default_factory=list)
     baseline_tier: Optional[Tier] = None
     baseline_points: int = 0
@@ -268,6 +287,66 @@ class Variant(BaseModel):
     reclass_points: Optional[int] = None
     reclass_delta: Optional[int] = None
     priority_score: float = 0.0
+
+
+SVType = Literal["DEL", "DUP", "INV", "INS", "BND", "CNV"]
+
+
+class DosageRegion(BaseModel):
+    """A gene or ClinGen region overlapped by a structural variant, with its
+    ClinGen dosage-sensitivity scores. HI/TS scores follow ClinGen's scale:
+        3  = sufficient evidence (established)
+        2  = emerging evidence
+        1  = little evidence
+        0  = no evidence
+        30 = gene associated with autosomal recessive phenotype
+        40 = dosage sensitivity unlikely
+    """
+    name: str
+    kind: Literal["gene", "region"] = "gene"
+    hi_score: Optional[int] = None
+    ts_score: Optional[int] = None
+    pli: Optional[float] = None                                  # gnomAD pLI (predicted HI)
+    overlap: Literal["full", "partial"] = "full"                 # SV vs the gene/region span
+
+
+class CNVEvidenceItem(BaseModel):
+    """One ClinGen/ACMG 2019 (Riggs et al. 2020) CNV scoring line. Unlike the
+    SNV EvidenceItem (integer Tavtigian points), CNV evidence carries a signed
+    fractional score that is summed to the final classification."""
+    section: str                                                 # e.g. "1A", "2A", "3B", "5A"
+    score: float                                                 # signed contribution
+    applied: bool = True
+    source: str = ""
+    detail: str = ""
+
+
+class StructuralVariant(BaseModel):
+    """A large structural / copy-number variant (PRD §4.x — SV/CNV pipeline).
+
+    Classified by the ClinGen CNV rubric (acmg/cnv.py), NOT the SNV Tavtigian
+    engine. Calling follows GATK gCNV best practices; annotation follows
+    AnnotSV (gene overlap + ClinGen dosage + gnomAD-SV frequency)."""
+    id: str
+    chrom: str
+    start: int
+    end: int
+    sv_type: SVType
+    length: Optional[int] = None
+    copy_number: Optional[int] = None                            # observed CN where called (e.g. 0,1,3)
+    dosage_direction: Optional[Literal["loss", "gain"]] = None   # derived from sv_type / copy_number
+    genes: list[str] = Field(default_factory=list)               # protein-coding genes wholly/partially involved
+    dosage_overlaps: list[DosageRegion] = Field(default_factory=list)
+    populations: list[PopulationAF] = Field(default_factory=list)  # gnomAD-SV / DGV
+    inheritance_models: list[InheritanceModel] = Field(default_factory=list)
+    inheritance_confidence: Literal["high", "medium", "low"] = "medium"
+    calls: list[MemberCall] = Field(default_factory=list)
+    evidence: list[CNVEvidenceItem] = Field(default_factory=list)
+    score: float = 0.0
+    tier: Optional["Tier"] = None
+    caller: Optional[str] = None                                 # "gatk_gcnv" | "manta" | ...
+    clinvar: Optional["ClinVarRecord"] = None                    # ClinVar SV/CNV overlay
+    clinvar_concordance: Optional["ClinVarConcordance"] = None   # engine-vs-ClinVar reconciliation
 
 
 class ReclassProposal(BaseModel):
@@ -303,6 +382,7 @@ class CaseEmission(BaseModel):
     # gene do" paragraph without duplicating prose across thousands of rows.
     gene_info: dict[str, GeneInfo] = Field(default_factory=dict)
     variants: list[Variant] = Field(default_factory=list)
+    structural_variants: list[StructuralVariant] = Field(default_factory=list)
     proposals: list[ReclassProposal] = Field(default_factory=list)
     lift_failed: list[dict] = Field(default_factory=list)  # variants that failed liftover
     versions: dict[str, str] = Field(default_factory=dict)  # track + tool versions

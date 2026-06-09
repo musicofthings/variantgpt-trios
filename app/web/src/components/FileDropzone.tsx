@@ -39,11 +39,8 @@ export function FileDropzone({
       onStage({ file: f, kind, error: "Unsupported format. Accepts .vcf, .vcf.gz, .bam, .bam.bai" });
       return;
     }
-    // Soft warning for very large files: Illumina WGS gVCFs can be 5-50GB.
-    if (f.size > 10 * 1024 * 1024 * 1024) {
-      onStage({ file: f, kind, error: `File is ${human(f.size)} — WGS scale; consider running engine off-edge (PRD §6.4).` });
-      return;
-    }
+    // Large files (WGS BAM/CRAM run 50–150 GB) are uploaded as a resumable S3
+    // multipart upload directly to R2, so size is not a blocker — just stage it.
     onStage({ file: f, kind });
   }
 

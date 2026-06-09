@@ -32,7 +32,6 @@ class AnnotationContext:
     tracks: list[TrackConfig] = field(default_factory=list)
     use_gnomad: bool = True
     gnomad_timeout: float = 5.0
-    use_demo_annotations: bool = False
 
 
 def _genomic_hgvs(chrom: str, pos: int, ref: str, alt: str) -> str:
@@ -102,65 +101,11 @@ def annotate(jv: JointVariant, ctx: AnnotationContext, pedigree: Optional[Pedigr
         predictors=_predictors(jv, ctx),
         calls=_project_calls(jv, pedigree) if pedigree else [],
     )
-    # 1. Prefer VEP CSQ if the input VCF was pre-annotated (most clinical
-    #    pipelines run VEP before sharing). Free, fast, no external calls.
+    # Prefer VEP CSQ if the input VCF was pre-annotated (most clinical pipelines
+    # run VEP before sharing). Free, fast, no external calls. Live adapters
+    # (gnomAD, tabix tracks, dbNSFP) fill the rest.
     apply_csq(v, jv)
-    # 2. Demo-data overlay: curated 11-variant lookup (used by build_demo_case).
-    #    Runs after CSQ so the demo case still wins on its own variants, but
-    #    real CSQ-annotated variants get their gene/HGVS without needing a
-    #    demo entry.
-    if ctx.use_demo_annotations:
-        _apply_demo_annotation(v)
     return v
-
-
-def _apply_demo_annotation(v: Variant) -> None:
-    """Inject gene / HGVS / consequence / AFs / predictors from the curated
-    demo dataset (tracks/demo_data.py). Used by the build_demo_case.py
-    pipeline so the engine can run on Windows without VEP/tabix/gnomAD
-    network calls and still produce a fully-populated case.json.
-
-    Real cases route through VEP + tabix + live gnomAD instead.
-    """
-    try:
-        import sys
-        from pathlib import Path
-        root = Path(__file__).resolve().parents[3]
-        tracks_dir = str(root / "tracks")
-        if tracks_dir not in sys.path:
-            sys.path.insert(0, tracks_dir)
-        from demo_data import lookup  # type: ignore
-    except Exception:
-        log.warning("demo annotation requested but tracks/demo_data.py not importable")
-        return
-
-    d = lookup(v.chrom, v.pos, v.ref, v.alt)
-    if d is None:
-        return
-
-    v.gene = d.gene
-    v.transcript = d.transcript
-    v.hgvs_c = d.hgvs_c
-    v.hgvs_p = d.hgvs_p
-    v.consequence = d.consequence
-
-    # Replace populations with the curated AFs (drop the live-gnomAD placeholder
-    # if it returned nothing in this offline environment).
-    pops: list[PopulationAF] = []
-    pops.append(PopulationAF(source="gnomad_v4_global", af=d.af_gnomad_global))
-    pops.append(PopulationAF(source="gnomad_v4_sas", af=d.af_gnomad_sas))
-    if d.af_indigenomes is not None:
-        pops.append(PopulationAF(source="indigenomes", af=d.af_indigenomes))
-    if d.af_genomeasia is not None:
-        pops.append(PopulationAF(source="genomeasia", af=d.af_genomeasia))
-    v.populations = pops
-
-    v.predictors = PredictorScores(
-        alphamissense=d.alphamissense,
-        revel=d.revel,
-        cadd=d.cadd,
-        spliceai=d.spliceai,
-    )
 
 
 def _population_af(jv: JointVariant, ctx: AnnotationContext) -> list[PopulationAF]:

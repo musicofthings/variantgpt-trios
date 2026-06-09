@@ -1,8 +1,11 @@
-"""South Asian VUS reclassification engine (PRD §4.6).
+"""South Asian reclassification engine (PRD §4.6).
 
-Runs ONLY on variants the baseline engine called VUS (or, optionally, on
-ClinVar conflicting-VUS). Re-evaluates frequency criteria against South Asian
-baselines (gnomAD sas, IndiGenomes, GenomeAsia, GenomeIndia-when-present).
+Runs on baseline VUS *and* on baseline LP/P calls — the latter so that a
+variant inflated to (Likely) Pathogenic by frequency-blind criteria (e.g. a
+truncating allele that is actually common in Indian populations) can be pulled
+back down when a South Asian source contradicts it. Re-evaluates frequency
+criteria against South Asian baselines (IndiGenomes, GenomeAsia,
+GenomeIndia-when-present).
 
 Rules:
   - BA1/BS1 fire if AF is above threshold in ANY South Asian source — pushes
@@ -40,7 +43,9 @@ def reclassify(
 ) -> tuple[ReclassProposal, int] | None:
     """Return (proposal, new_total_points) — new_total_points is the sum across
     the full post-reclass ledger, not just the changed criteria."""
-    if variant.baseline_tier != "VUS":
+    # VUS plus the pathogenic tiers: a frequency contradiction in a South Asian
+    # source can both promote a VUS to (L)B and demote an inflated LP/P call.
+    if variant.baseline_tier not in ("VUS", "LP", "P"):
         return None
 
     recalibrated = deepcopy(variant)
