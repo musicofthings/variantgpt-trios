@@ -38,6 +38,23 @@ PUBLIC_API_BASE = "https://variantgpt-api.shibi-kannan.workers.dev"
 # Fly.io-hosted engine endpoint. Updated after `fly deploy` provisions the app.
 ENGINE_BASE_URL = "https://variantgpt-engine.fly.dev"
 
+# ── Reference + resources for the aligned-reads (BAM/CRAM) path ──────────────
+# These are R2 KEYS within the `variantgpt` bucket — you must upload the actual
+# files to these keys (see infra/DEPLOY_BAM_SV.md). REFERENCE_FASTA_KEY is the
+# gate: when unset, BAM uploads are rejected. The reference build MUST match
+# how the BAMs were aligned (GRCh38 here).
+REFERENCE_FASTA_KEY = "refs/GRCh38/Homo_sapiens_assembly38.fasta"
+REFERENCE_FAI_KEY   = "refs/GRCh38/Homo_sapiens_assembly38.fasta.fai"
+REFERENCE_DICT_KEY  = "refs/GRCh38/Homo_sapiens_assembly38.dict"
+# Comma-separated known-sites VCFs for BQSR (optional — BQSR is skipped if empty).
+KNOWN_SITES_KEYS    = "refs/GRCh38/Homo_sapiens_assembly38.dbsnp138.vcf.gz,refs/GRCh38/Mills_and_1000G_gold_standard.indels.hg38.vcf.gz"
+
+# ── gCNV panel-of-normals bundle for CNV calling (optional) ──────────────────
+# Build once with `variantgpt-engine build-pon`, upload the two outputs to these
+# keys. When unset, BAM→SNV still runs; only CNV calling is skipped.
+GCNV_MODEL_TGZ_KEY  = "refs/gcnv/gcnv_pon.tgz"
+GCNV_INTERVALS_KEY  = "refs/gcnv/filtered.interval_list"
+
 # Secrets (set via `wrangler secret put`):
 #   R2_ACCESS_KEY_ID         # for sigv4 presigning of R2 PUT/GET URLs
 #   R2_SECRET_ACCESS_KEY

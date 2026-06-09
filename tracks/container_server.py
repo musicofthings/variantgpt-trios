@@ -189,13 +189,10 @@ async def _execute_job(job: dict[str, Any]) -> None:
             #    uploaded VCFs. Requires reference_url (+ .fai/.dict).
             bam_urls: dict[str, str] = job.get("bam_urls") or {}
             if bam_urls:
-                reference_url = job.get("reference_url")
-                if not reference_url:
-                    raise RuntimeError("bam_urls supplied but no reference_url for GATK calling")
                 emit(f"BAM calling: {len(bam_urls)} sample(s) via GATK best practices")
                 refdir = workdir / "ref"
                 refdir.mkdir(parents=True, exist_ok=True)
-                ref_path = refdir / "reference.fasta"
+                ks_paths: list[Path] = []
                 async with httpx.AsyncClient(timeout=600.0, follow_redirects=True) as client:
                     async def _dl(url: str, dst: Path) -> None:
                         async with client.stream("GET", url) as r:
@@ -203,16 +200,36 @@ async def _execute_job(job: dict[str, Any]) -> None:
                             with open(dst, "wb") as fh:
                                 async for chunk in r.aiter_bytes():
                                     fh.write(chunk)
-                    await _dl(reference_url, ref_path)
-                    if job.get("reference_fai_url"):
-                        await _dl(job["reference_fai_url"], refdir / "reference.fasta.fai")
-                    if job.get("reference_dict_url"):
-                        await _dl(job["reference_dict_url"], refdir / "reference.dict")
-                    ks_paths: list[Path] = []
-                    for i, ks_url in enumerate(job.get("known_sites_urls") or []):
-                        ks_dst = refdir / f"known_sites_{i}.vcf.gz"
-                        await _dl(ks_url, ks_dst)
-                        ks_paths.append(ks_dst)
+
+                    # Prefer a baked-in / volume-mounted reference (REFERENCE_FASTA_PATH)
+                    # to avoid re-downloading a multi-GB FASTA per case. Its .fai/.dict
+                    # are expected alongside it. Known sites can likewise come from
+                    # KNOWN_SITES_PATHS (colon-separated). Otherwise fall back to the
+                    # signed R2 URLs the Worker passed.
+                    ref_env = os.environ.get("REFERENCE_FASTA_PATH")
+                    if ref_env and Path(ref_env).exists():
+                        ref_path = Path(ref_env)
+                        emit(f"using local reference {ref_path}")
+                        for p in os.environ.get("KNOWN_SITES_PATHS", "").split(":"):
+                            if p and Path(p).exists():
+                                ks_paths.append(Path(p))
+                    else:
+                        reference_url = job.get("reference_url")
+                        if not reference_url:
+                            raise RuntimeError(
+                                "bam_urls supplied but no reference — set REFERENCE_FASTA_PATH "
+                                "on the engine or configure REFERENCE_FASTA_KEY on the Worker"
+                            )
+                        ref_path = refdir / "reference.fasta"
+                        await _dl(reference_url, ref_path)
+                        if job.get("reference_fai_url"):
+                            await _dl(job["reference_fai_url"], refdir / "reference.fasta.fai")
+                        if job.get("reference_dict_url"):
+                            await _dl(job["reference_dict_url"], refdir / "reference.dict")
+                        for i, ks_url in enumerate(job.get("known_sites_urls") or []):
+                            ks_dst = refdir / f"known_sites_{i}.vcf.gz"
+                            await _dl(ks_url, ks_dst)
+                            ks_paths.append(ks_dst)
                     bam_paths: dict[str, Path] = {}
                     for role, url in bam_urls.items():
                         ext = ".cram" if str(url).lower().split("?")[0].endswith(".cram") else ".bam"
