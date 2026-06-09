@@ -7,8 +7,9 @@
 import { useEffect, useState } from "react";
 import { api, apiFetch } from "./apiBase";
 import type {
-  CaseRow, Criterion, CriterionStrength, EvidenceRow, InheritanceModel,
-  PhenotypeScore, PopulationAF, PopulationSource, Predictors, ReclassProposal, Tier, VariantRow,
+  CaseRow, ClinVarConcordance, Criterion, CriterionStrength, EvidenceRow, InheritanceModel,
+  PhenotypeScore, PopulationAF, PopulationSource, Predictors, ReclassProposal,
+  StructuralVariantRow, Tier, VariantRow,
 } from "./types";
 
 /** Subset of the engine's case.json we actually consume. */
@@ -37,8 +38,47 @@ export interface EngineCase {
   } | null;
   qc: Record<string, unknown>;
   variants: EngineVariant[];
+  structural_variants?: EngineStructuralVariant[];
   proposals: EngineProposal[];
   versions: Record<string, string>;
+}
+
+interface EngineClinVarConcordance {
+  status: "concordant" | "discordant" | "uninformative";
+  engine_tier?: Tier | null;
+  clinvar_tier?: Tier | null;
+  clinvar_significance?: string | null;
+  review_stars?: number | null;
+  note?: string | null;
+}
+
+interface EngineStructuralVariant {
+  id: string;
+  chrom: string;
+  start: number;
+  end: number;
+  sv_type: "DEL" | "DUP" | "INV" | "INS" | "BND" | "CNV";
+  length?: number | null;
+  copy_number?: number | null;
+  dosage_direction?: "loss" | "gain" | null;
+  genes?: string[] | null;
+  dosage_overlaps?: {
+    name: string; kind?: "gene" | "region";
+    hi_score?: number | null; ts_score?: number | null; pli?: number | null;
+    overlap?: "full" | "partial";
+  }[] | null;
+  populations?: { source: string; ac?: number; an?: number; af?: number | null; n_hom?: number; n_het?: number }[] | null;
+  inheritance_models?: string[] | null;
+  inheritance_confidence?: string | null;
+  evidence?: { section: string; score: number; applied?: boolean; source?: string | null; detail?: string | null }[] | null;
+  score?: number | null;
+  tier?: Tier | null;
+  caller?: string | null;
+  clinvar?: {
+    clinical_significance?: string | null; review_status?: string | null;
+    review_stars?: number | null; variation_id?: string | null;
+  } | null;
+  clinvar_concordance?: EngineClinVarConcordance | null;
 }
 
 /** HPO term as used by the report's patient-details section. */
@@ -121,6 +161,7 @@ interface EngineVariant {
     conditions?: string[] | null;
     variation_id?: string | null;
   } | null;
+  clinvar_concordance?: EngineClinVarConcordance | null;
   evidence: { criterion: string; fired: boolean; strength?: string | null; points: number; source: string; detail: string }[];
   baseline_tier?: Tier | null;
   baseline_points: number;
@@ -255,6 +296,67 @@ function adaptVariant(ev: EngineVariant, proposal?: EngineProposal): VariantRow 
       conditions: ev.clinvar.conditions ?? undefined,
       variation_id: ev.clinvar.variation_id ?? undefined,
     } : null,
+    clinvar_concordance: adaptConcordance(ev.clinvar_concordance),
+  };
+}
+
+function adaptConcordance(c: EngineClinVarConcordance | null | undefined): ClinVarConcordance | null {
+  if (!c) return null;
+  return {
+    status: c.status,
+    engine_tier: c.engine_tier ?? null,
+    clinvar_tier: c.clinvar_tier ?? null,
+    clinvar_significance: c.clinvar_significance ?? null,
+    review_stars: c.review_stars ?? null,
+    note: c.note ?? undefined,
+  };
+}
+
+function adaptStructuralVariant(sv: EngineStructuralVariant): StructuralVariantRow {
+  return {
+    id: sv.id,
+    chrom: sv.chrom,
+    start: sv.start,
+    end: sv.end,
+    sv_type: sv.sv_type,
+    length: sv.length ?? null,
+    copy_number: sv.copy_number ?? null,
+    dosage_direction: sv.dosage_direction ?? null,
+    genes: sv.genes ?? [],
+    dosage_overlaps: (sv.dosage_overlaps ?? []).map((d) => ({
+      name: d.name,
+      kind: d.kind ?? "gene",
+      hi_score: d.hi_score ?? null,
+      ts_score: d.ts_score ?? null,
+      pli: d.pli ?? null,
+      overlap: d.overlap ?? "full",
+    })),
+    populations: (sv.populations ?? [])
+      .map((p): PopulationAF | null => {
+        const src = POP_MAP[p.source] ?? (p.source === "gnomad_sv" ? "gnomad_global" : null);
+        if (!src) return null;
+        return { source: src, af: p.af ?? null, ac: p.ac, an: p.an, n_hom: p.n_hom, n_het: p.n_het };
+      })
+      .filter((x): x is PopulationAF => x !== null),
+    inheritance_models: (sv.inheritance_models ?? []) as InheritanceModel[],
+    inheritance_confidence: (sv.inheritance_confidence as "high" | "medium" | "low" | undefined) ?? undefined,
+    evidence: (sv.evidence ?? []).map((e) => ({
+      section: e.section,
+      score: e.score,
+      applied: e.applied ?? true,
+      source: e.source ?? undefined,
+      detail: e.detail ?? undefined,
+    })),
+    score: sv.score ?? 0,
+    tier: sv.tier ?? null,
+    caller: sv.caller ?? null,
+    clinvar: sv.clinvar ? {
+      clinical_significance: sv.clinvar.clinical_significance ?? undefined,
+      review_status: sv.clinvar.review_status ?? undefined,
+      review_stars: sv.clinvar.review_stars ?? undefined,
+      variation_id: sv.clinvar.variation_id ?? undefined,
+    } : null,
+    clinvar_concordance: adaptConcordance(sv.clinvar_concordance),
   };
 }
 
@@ -278,6 +380,7 @@ function criterionLabel(c: EngineProposal["changed_criteria"][number]): string {
 export function adaptCase(engine: EngineCase): {
   caseRow: CaseRow;
   variants: VariantRow[];
+  structural_variants: StructuralVariantRow[];
   proposals: ReclassProposal[];
   hpo: HPOTermRow[];
   clinical_history: ClinicalHistory | null;
@@ -291,11 +394,12 @@ export function adaptCase(engine: EngineCase): {
 } {
   const propByVar = new Map(engine.proposals.map((p) => [p.variant_id, p]));
   const variants = engine.variants.map((v) => adaptVariant(v, propByVar.get(v.id)));
+  const structural_variants = (engine.structural_variants ?? []).map(adaptStructuralVariant);
   const proband = engine.pedigree.members.find((m) => m.role === "proband");
   return {
     caseRow: {
       id: engine.case_id,
-      name: `Demo trio · ${engine.case_id}`,
+      name: engine.case_id,
       proband: proband?.sample_name ?? proband?.id,
       findings_count: variants.length,
       vus_count: variants.filter((v) => v.baseline_tier === "VUS").length,
@@ -304,6 +408,7 @@ export function adaptCase(engine: EngineCase): {
       updated_at: new Date().toISOString().slice(0, 10),
     },
     variants,
+    structural_variants,
     proposals: variants
       .filter((v) => v.reclass)
       .map((v) => v.reclass as ReclassProposal),
@@ -340,16 +445,14 @@ function inferPipelineMode(engine: EngineCase): "singleton" | "duo" | "trio" | "
 const cache = new Map<string, ReturnType<typeof adaptCase>>();
 const inflight = new Map<string, Promise<ReturnType<typeof adaptCase>>>();
 
-const DEMO_URL = "/demo/case.json";
-
+/** Fetch + adapt a real case.json from the Worker. No demo/dummy fallback —
+ *  a caseId is required; without one this rejects. */
 export async function loadCase(caseId?: string) {
-  const url = caseId && caseId !== "demo-trio-001" ? api(`/cases/${caseId}`) : DEMO_URL;
+  if (!caseId) throw new Error("a caseId is required — no demo case is available");
+  const url = api(`/cases/${caseId}`);
   if (cache.has(url)) return cache.get(url)!;
   if (inflight.has(url)) return inflight.get(url)!;
-  // Demo URL hits a static asset on Pages (no auth); uploaded cases hit
-  // the Worker and need the Clerk JWT.
-  const fetcher = url === DEMO_URL ? fetch : apiFetch;
-  const p = fetcher(url)
+  const p = apiFetch(url)
     .then((r) => {
       if (!r.ok) throw new Error(`case fetch ${r.status} for ${url}`);
       return r.json();
@@ -368,17 +471,19 @@ export async function loadCase(caseId?: string) {
   return p;
 }
 
-/** Back-compat: the demo dashboard always loads the seeded demo. */
-export const loadDemoCase = () => loadCase();
-
-/** React hook: fetch + adapt a case.json (demo by default, or a specific
- * uploaded case if `caseId` is provided). */
-export function useDemoCase(caseId?: string) {
-  const url = caseId && caseId !== "demo-trio-001" ? api(`/cases/${caseId}`) : DEMO_URL;
-  const [data, setData] = useState<ReturnType<typeof adaptCase> | null>(cache.get(url) ?? null);
+/** React hook: fetch + adapt a real uploaded case's case.json. Requires a
+ *  caseId; surfaces an error state when none is provided (no demo). */
+export function useCase(caseId?: string) {
+  const url = caseId ? api(`/cases/${caseId}`) : null;
+  const [data, setData] = useState<ReturnType<typeof adaptCase> | null>(url ? cache.get(url) ?? null : null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!caseId || !url) {
+      setData(null);
+      setError("No case selected.");
+      return;
+    }
     setData(cache.get(url) ?? null);
     setError(null);
     if (cache.has(url)) return;
@@ -389,3 +494,7 @@ export function useDemoCase(caseId?: string) {
 
   return { data, error, loading: !data && !error };
 }
+
+/** Back-compat alias — `useDemoCase` no longer loads a demo; it requires a
+ *  caseId like useCase. Kept so existing call sites compile. */
+export const useDemoCase = useCase;

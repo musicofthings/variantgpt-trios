@@ -179,6 +179,171 @@ apiRouter.get("/cases/:id/upload-url/:role", async (c) => {
   return c.json({ url, key, expiresIn: 3600, role, filename: filename ?? null });
 });
 
+// ───────────────────────── multipart upload (huge BAM/CRAM) ─────────────────────────
+//
+// A single presigned PUT caps at R2's 5 GB single-object-PUT limit and isn't
+// resumable. WGS BAMs run 50–150 GB, so large files go through S3-compatible
+// multipart upload: the client splits the file into parts, PUTs each part
+// directly to R2 via a presigned URL (bytes never touch the Worker), and we
+// stitch them with CompleteMultipartUpload.
+//
+// NOTE: the bucket needs a CORS policy allowing PUT from the SPA origin and
+// exposing the `ETag` response header (the browser must read each part's ETag
+// to send back at completion). Configure once on the R2 bucket.
+
+const R2_BUCKET = "variantgpt";
+// S3 requires every part except the last to be ≥ 5 MiB. We advertise 64 MiB
+// so a 150 GB BAM is ~2400 parts (well under the 10 000-part ceiling).
+const MULTIPART_PART_SIZE = 64 * 1024 * 1024;
+
+function xmlTag(xml: string, tag: string): string | null {
+  const m = xml.match(new RegExp(`<${tag}>([^<]+)</${tag}>`));
+  return m ? m[1] : null;
+}
+
+async function createMultipart(env: Bindings, key: string, contentType?: string): Promise<string> {
+  const aws = r2Client(env);
+  const url = `${r2Endpoint(env.R2_ACCOUNT_ID)}/${R2_BUCKET}/${encodeURI(key)}?uploads`;
+  const res = await aws.fetch(url, {
+    method: "POST",
+    headers: contentType ? { "content-type": contentType } : {},
+  });
+  if (!res.ok) throw new Error(`CreateMultipartUpload ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  const uploadId = xmlTag(await res.text(), "UploadId");
+  if (!uploadId) throw new Error("CreateMultipartUpload returned no UploadId");
+  return uploadId;
+}
+
+async function signPartUrl(env: Bindings, key: string, uploadId: string, partNumber: number): Promise<string> {
+  const aws = r2Client(env);
+  const url =
+    `${r2Endpoint(env.R2_ACCOUNT_ID)}/${R2_BUCKET}/${encodeURI(key)}` +
+    `?partNumber=${partNumber}&uploadId=${encodeURIComponent(uploadId)}&X-Amz-Expires=86400`;
+  const signed = await aws.sign(new Request(url, { method: "PUT" }), { aws: { signQuery: true } });
+  return signed.url;
+}
+
+async function completeMultipart(
+  env: Bindings, key: string, uploadId: string,
+  parts: { partNumber: number; etag: string }[],
+): Promise<void> {
+  const aws = r2Client(env);
+  const body =
+    "<CompleteMultipartUpload>" +
+    parts
+      .slice()
+      .sort((a, b) => a.partNumber - b.partNumber)
+      .map((p) => `<Part><PartNumber>${p.partNumber}</PartNumber><ETag>${p.etag}</ETag></Part>`)
+      .join("") +
+    "</CompleteMultipartUpload>";
+  const url = `${r2Endpoint(env.R2_ACCOUNT_ID)}/${R2_BUCKET}/${encodeURI(key)}?uploadId=${encodeURIComponent(uploadId)}`;
+  const res = await aws.fetch(url, { method: "POST", body, headers: { "content-type": "application/xml" } });
+  if (!res.ok) throw new Error(`CompleteMultipartUpload ${res.status}: ${(await res.text()).slice(0, 200)}`);
+}
+
+async function abortMultipart(env: Bindings, key: string, uploadId: string): Promise<void> {
+  const aws = r2Client(env);
+  const url = `${r2Endpoint(env.R2_ACCOUNT_ID)}/${R2_BUCKET}/${encodeURI(key)}?uploadId=${encodeURIComponent(uploadId)}`;
+  await aws.fetch(url, { method: "DELETE" });
+}
+
+/**
+ * POST /api/cases/:id/uploads/:role/multipart?filename=foo.bam
+ * → { uploadId, key, partSize }
+ *
+ * Begin a resumable multipart upload for a large aligned-reads file. The client
+ * then requests a presigned URL per part and PUTs chunks directly to R2.
+ */
+apiRouter.post("/cases/:id/uploads/:role/multipart", async (c) => {
+  const id = sanitize(c.req.param("id"));
+  const role = c.req.param("role");
+  const filename = c.req.query("filename") ?? undefined;
+  if (!id) return c.json({ error: "bad caseId" }, 400);
+  if (!ALLOWED_ROLES.has(role)) return c.json({ error: "bad role" }, 400);
+  const ext = pickExt(filename);
+  if (!ext || !ALLOWED_EXTS.has(ext)) {
+    return c.json({ error: "unsupported file extension (allowed: vcf, vcf.gz, bam)" }, 400);
+  }
+
+  const key = `cases/${id}/uploads/${role}.${ext}`;
+  let uploadId: string;
+  try {
+    uploadId = await createMultipart(c.env, key, "application/octet-stream");
+  } catch (e) {
+    return c.json({ error: `multipart init failed: ${String(e).slice(0, 200)}` }, 502);
+  }
+
+  // Ensure the cases row exists (uploads.case_id FK) before we record anything.
+  await c.env.DB.prepare(
+    `INSERT INTO cases (id, name, status) VALUES (?, ?, 'draft') ON CONFLICT(id) DO NOTHING`,
+  ).bind(id, `Case ${id}`).run();
+
+  return c.json({ uploadId, key, partSize: MULTIPART_PART_SIZE, role, filename: filename ?? null });
+});
+
+/**
+ * GET /api/cases/:id/uploads/:role/multipart/:uploadId/part?key=<key>&partNumber=<n>
+ * → { url } — presigned PUT for one part (valid 24h, since huge uploads are slow).
+ */
+apiRouter.get("/cases/:id/uploads/:role/multipart/:uploadId/part", async (c) => {
+  const id = sanitize(c.req.param("id"));
+  if (!id) return c.json({ error: "bad caseId" }, 400);
+  const uploadId = c.req.param("uploadId");
+  const key = c.req.query("key");
+  const partNumber = parseInt(c.req.query("partNumber") ?? "", 10);
+  if (!key || !key.startsWith(`cases/${id}/uploads/`)) return c.json({ error: "bad key" }, 400);
+  if (!Number.isInteger(partNumber) || partNumber < 1 || partNumber > 10000) {
+    return c.json({ error: "partNumber must be 1..10000" }, 400);
+  }
+  const url = await signPartUrl(c.env, key, uploadId, partNumber);
+  return c.json({ url, partNumber });
+});
+
+/**
+ * POST /api/cases/:id/uploads/:role/multipart/:uploadId/complete
+ *   body = { key, filename?, parts: [{ partNumber, etag }] }
+ * → { ok, key } — stitches the parts and records the uploads row.
+ */
+apiRouter.post("/cases/:id/uploads/:role/multipart/:uploadId/complete", async (c) => {
+  const id = sanitize(c.req.param("id"));
+  const role = c.req.param("role");
+  if (!id) return c.json({ error: "bad caseId" }, 400);
+  if (!ALLOWED_ROLES.has(role)) return c.json({ error: "bad role" }, 400);
+  const uploadId = c.req.param("uploadId");
+  const body = await c.req.json<{ key: string; filename?: string; parts: { partNumber: number; etag: string }[] }>();
+  if (!body?.key || !body.key.startsWith(`cases/${id}/uploads/`)) return c.json({ error: "bad key" }, 400);
+  if (!Array.isArray(body.parts) || body.parts.length === 0) return c.json({ error: "no parts" }, 400);
+
+  try {
+    await completeMultipart(c.env, body.key, uploadId, body.parts);
+  } catch (e) {
+    return c.json({ error: `multipart complete failed: ${String(e).slice(0, 200)}` }, 502);
+  }
+
+  await c.env.DB.prepare(
+    `INSERT INTO uploads (case_id, role, r2_key, filename, uploaded_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(case_id, role) DO UPDATE SET
+       r2_key=excluded.r2_key, filename=excluded.filename, uploaded_at=excluded.uploaded_at`,
+  ).bind(id, role, body.key, body.filename ?? null, Date.now()).run();
+
+  return c.json({ ok: true, key: body.key, role });
+});
+
+/**
+ * DELETE /api/cases/:id/uploads/:role/multipart/:uploadId?key=<key>
+ * → { ok } — abort an in-progress multipart upload (frees R2 part storage).
+ */
+apiRouter.delete("/cases/:id/uploads/:role/multipart/:uploadId", async (c) => {
+  const id = sanitize(c.req.param("id"));
+  if (!id) return c.json({ error: "bad caseId" }, 400);
+  const uploadId = c.req.param("uploadId");
+  const key = c.req.query("key");
+  if (!key || !key.startsWith(`cases/${id}/uploads/`)) return c.json({ error: "bad key" }, 400);
+  await abortMultipart(c.env, key, uploadId);
+  return c.json({ ok: true });
+});
+
 /** Shape of the manifest the SPA sends and we persist in jobs.manifest_json. */
 interface CaseManifest {
   pedigree: { id: string; role: string; sex: string; affected: boolean; missing?: boolean; sample_name?: string }[];
@@ -216,11 +381,58 @@ async function _continueRun(
   byRole: Map<string, string>,
 ) {
 
-  // Mint signed URLs for the container.
+  // Mint signed URLs for the container. Split uploads by extension: aligned
+  // reads (.bam/.cram) route into the engine's GATK calling path (bam_urls +
+  // reference); everything else is a VCF fed straight into annotation.
   const vcfUrls: Record<string, string> = {};
+  const bamUrls: Record<string, string> = {};
   for (const [role, key] of byRole.entries()) {
-    vcfUrls[role] = await signR2(c.env, "variantgpt", key, "GET", 3600);
+    const lower = key.toLowerCase();
+    const signed = await signR2(c.env, "variantgpt", key, "GET", 24 * 3600);
+    if (lower.endsWith(".bam") || lower.endsWith(".cram")) bamUrls[role] = signed;
+    else vcfUrls[role] = signed;
   }
+
+  // Reference + known-sites for GATK calling — only needed when BAMs are present.
+  // Configured as R2 keys on the Worker (REFERENCE_FASTA_KEY etc.); when a BAM
+  // is uploaded but no reference is configured, fail fast with a clear message.
+  let referenceUrl: string | undefined;
+  let referenceFaiUrl: string | undefined;
+  let referenceDictUrl: string | undefined;
+  const knownSitesUrls: string[] = [];
+  if (Object.keys(bamUrls).length > 0) {
+    if (!c.env.REFERENCE_FASTA_KEY) {
+      return c.json({
+        error: "BAM upload requires a reference genome, but REFERENCE_FASTA_KEY is not configured on this Worker",
+        hint: "set REFERENCE_FASTA_KEY (+ optional REFERENCE_FAI_KEY / REFERENCE_DICT_KEY / KNOWN_SITES_KEYS) to the R2 keys of the reference FASTA",
+      }, 400);
+    }
+    referenceUrl = await signR2(c.env, "variantgpt", c.env.REFERENCE_FASTA_KEY, "GET", 24 * 3600);
+    if (c.env.REFERENCE_FAI_KEY) referenceFaiUrl = await signR2(c.env, "variantgpt", c.env.REFERENCE_FAI_KEY, "GET", 24 * 3600);
+    if (c.env.REFERENCE_DICT_KEY) referenceDictUrl = await signR2(c.env, "variantgpt", c.env.REFERENCE_DICT_KEY, "GET", 24 * 3600);
+    for (const ksKey of (c.env.KNOWN_SITES_KEYS ?? "").split(",").map((s) => s.trim()).filter(Boolean)) {
+      knownSitesUrls.push(await signR2(c.env, "variantgpt", ksKey, "GET", 24 * 3600));
+    }
+  }
+
+  // SV/CNV: a pre-computed AnnotSV TSV (produced upstream from GATK gCNV/Manta)
+  // is signed when present so the engine can classify CNVs (ClinGen 2019).
+  let svAnnotsvUrl: string | undefined;
+  const svKey = `cases/${id}/uploads/sv.annotsv.tsv`;
+  if (await c.env.BUCKET.head(svKey).catch(() => null)) {
+    svAnnotsvUrl = await signR2(c.env, "variantgpt", svKey, "GET", 24 * 3600);
+  }
+
+  // gCNV cohort-model bundle — when BAMs are present and a panel-of-normals
+  // bundle + intervals are configured, the engine calls CNVs from the proband
+  // BAM (GATK gCNV CASE) → AnnotSV → ClinGen-2019 classification.
+  let gcnvModelUrl: string | undefined;
+  let gcnvIntervalsUrl: string | undefined;
+  if (Object.keys(bamUrls).length > 0 && c.env.GCNV_MODEL_TGZ_KEY && c.env.GCNV_INTERVALS_KEY) {
+    gcnvModelUrl = await signR2(c.env, "variantgpt", c.env.GCNV_MODEL_TGZ_KEY, "GET", 24 * 3600);
+    gcnvIntervalsUrl = await signR2(c.env, "variantgpt", c.env.GCNV_INTERVALS_KEY, "GET", 24 * 3600);
+  }
+
   const caseJsonKey = `cases/${id}/case.json`;
   const casePutUrl = await signR2(c.env, "variantgpt", caseJsonKey, "PUT", 3600);
 
@@ -287,6 +499,18 @@ async function _continueRun(
       case_id: id,
       manifest,
       vcf_urls: vcfUrls,
+      // Aligned-reads path (GATK best practices) — present only when BAM/CRAM
+      // were uploaded; the engine calls them to VCF before annotation.
+      bam_urls: bamUrls,
+      reference_url: referenceUrl,
+      reference_fai_url: referenceFaiUrl,
+      reference_dict_url: referenceDictUrl,
+      known_sites_urls: knownSitesUrls,
+      // SV/CNV classification input (pre-annotated AnnotSV TSV), when present.
+      sv_annotsv_url: svAnnotsvUrl,
+      // gCNV cohort-model bundle — drives BAM→CNV calling in the engine.
+      gcnv_model_url: gcnvModelUrl,
+      gcnv_intervals_url: gcnvIntervalsUrl,
       case_put_url: casePutUrl,
       cache_urls: cacheUrls,
       callback_url: callbackUrl,

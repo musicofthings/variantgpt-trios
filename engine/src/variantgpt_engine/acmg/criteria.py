@@ -11,8 +11,9 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
-from ..models import EvidenceItem, Variant
-from .points import points_for
+from ..models import EvidenceItem, PopulationAF, Variant
+from . import dosage
+from .points import downgrade, points_for, weaker_strength
 from .thresholds import thresholds_for
 
 CriterionFn = Callable[[Variant], Optional[EvidenceItem]]
@@ -33,19 +34,101 @@ def _af(v: Variant, source: str) -> Optional[float]:
     return None
 
 
+def _pop_row(v: Variant, source: str) -> Optional[PopulationAF]:
+    """Return the PopulationAF row for a source, or None if that source was
+    never consulted for this variant. Distinguishes 'queried and absent'
+    (row present, af 0/None) from 'never looked' (no row) — the distinction
+    PM2 needs so it doesn't fire on missing data."""
+    for pop in v.populations:
+        if pop.source == source:
+            return pop
+    return None
+
+
+def _consequence_terms(v: Variant) -> set[str]:
+    """VEP joins multiple consequences with '&' (and occasionally ','), e.g.
+    'splice_donor_variant&intron_variant'. Split so membership tests see every
+    term, not just the exact compound string."""
+    raw = (v.consequence or "").replace(",", "&")
+    return {t.strip() for t in raw.split("&") if t.strip()}
+
+
+def _parse_exon(exon: Optional[str]) -> tuple[Optional[int], Optional[int]]:
+    """VEP EXON/INTRON come as 'rank/total' (e.g. '14/45'). Return (rank, total)."""
+    if not exon or "/" not in exon:
+        return None, None
+    rank_s, total_s = exon.split("/", 1)
+    try:
+        return int(rank_s), int(total_s)
+    except ValueError:
+        return None, None
+
+
 # ───────────────────────── Pathogenic ─────────────────────────
+
+# LoF consequence → null-variant subtype, for PVS1 routing.
+_LOF_CONSEQUENCES = {"stop_gained", "frameshift_variant", "splice_acceptor_variant",
+                     "splice_donor_variant", "start_lost"}
+
 
 @criterion("PVS1")
 def pvs1(v: Variant) -> EvidenceItem:
-    lof_consequences = {"stop_gained", "frameshift_variant", "splice_acceptor_variant",
-                        "splice_donor_variant", "start_lost"}
-    fired = (v.consequence or "") in lof_consequences
+    """Null variant (LoF) — graded by the ClinGen SVI / Abou Tayoun 2018
+    decision tree rather than fired at VeryStrong on consequence alone.
+
+    Gating (entry criterion): LoF must be an established disease mechanism for
+    the gene (dosage.lof_mechanism). If it isn't, PVS1 does not fire; if the
+    mechanism is uncurated, PVS1 is capped at Moderate as a conservative
+    auto-proposal (curator-overridable).
+
+    Strength modifiers we can evaluate from VEP fields:
+      - NMD escape (variant in the last exon): downgrade one step. Without
+        exon coordinates we treat only the terminal exon as NMD-escaping; the
+        last-50bp-of-penultimate-exon rule needs CDS coordinates (future work).
+      - start_lost: capped at Moderate (an alternative start codon may rescue).
+    """
+    terms = _consequence_terms(v)
+    lof = terms & _LOF_CONSEQUENCES
+    if not lof:
+        return EvidenceItem(criterion="PVS1", fired=False)
+
+    mech = dosage.lof_mechanism(v.gene)
+    if mech == "none":
+        return EvidenceItem(
+            criterion="PVS1", fired=False, source="dosage",
+            detail=(f"LoF ({', '.join(sorted(lof))}) not the disease mechanism "
+                    f"for {v.gene} (gain-of-function / dominant-negative gene)"),
+        )
+
+    strength = "VS"
+    notes: list[str] = []
+
+    # start_lost never reaches VeryStrong — alternative initiation may rescue.
+    if "start_lost" in lof:
+        strength = weaker_strength(strength, "M")
+        notes.append("start-loss (alt-start uncertainty)")
+
+    # NMD escape: terminal-exon truncation.
+    rank, total = _parse_exon(v.exon)
+    if rank is not None and total is not None and rank == total and "start_lost" not in lof:
+        down = downgrade(strength, 1)
+        if down is None:
+            return EvidenceItem(criterion="PVS1", fired=False, source="vep",
+                                detail="NMD-escaping LoF downgraded below Supporting")
+        strength = down
+        notes.append(f"NMD-escaping (last exon {rank}/{total})")
+
+    # Uncurated gene mechanism: cap at Moderate.
+    if mech == "unknown":
+        strength = weaker_strength(strength, "M")
+        notes.append("gene LoF mechanism uncurated → capped Moderate")
+
+    detail = f"predicted LoF ({', '.join(sorted(lof))}) in {v.gene or 'gene'}"
+    if notes:
+        detail += "; " + "; ".join(notes)
     return EvidenceItem(
-        criterion="PVS1", fired=fired,
-        strength="VS" if fired else None,
-        points=points_for("VS") if fired else 0,
-        source="vep" if fired else "",
-        detail=(f"predicted LoF: {v.consequence}" if fired else ""),
+        criterion="PVS1", fired=True, strength=strength,
+        points=points_for(strength), source="vep+dosage", detail=detail,
     )
 
 
@@ -135,14 +218,25 @@ def pm2(v: Variant) -> EvidenceItem:
     present at meaningful AF in a South Asian source.
     """
     t = thresholds_for(v.gene)
-    global_af = _af(v, "gnomad_v4_global")
-    fired = global_af is None or global_af < t.pm2_supporting
+    row = _pop_row(v, "gnomad_v4_global")
+    # Missing-data guard: absence of *data* is not absence from the population.
+    # PM2 only applies when gnomAD was actually consulted for this variant. The
+    # gnomAD adapter emits an explicit af=0 row for queried-and-absent variants,
+    # so a None row means "never looked" (offline/demo/lookup failure).
+    if row is None:
+        return EvidenceItem(
+            criterion="PM2", fired=False, source="gnomad_v4_global",
+            detail="not applied: no gnomAD frequency available for this variant",
+        )
+    af = row.af if row.af is not None else 0.0
+    fired = af < t.pm2_supporting
     return EvidenceItem(
         criterion="PM2", fired=fired,
         strength="P" if fired else None,
         points=points_for("P") if fired else 0,
         source="gnomad_v4_global",
-        detail=(f"rare in gnomAD global (AF<{t.pm2_supporting}, {t.source})" if fired else ""),
+        detail=(f"rare/absent in gnomAD global (AF={af:.2e}<{t.pm2_supporting}, {t.source})"
+                if fired else f"AF={af:.2e} ≥ PM2 cutoff {t.pm2_supporting}"),
     )
 
 

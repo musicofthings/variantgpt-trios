@@ -7,6 +7,7 @@ import { HpoSearch, type HpoHit } from "../components/HpoSearch";
 import { pedigreeForMode, type PedigreeState } from "../types-pedigree";
 import { autoMapSample, sniffFile } from "../vcfSniff";
 import { api, apiFetch } from "../apiBase";
+import { uploadStaged } from "../upload";
 
 /** Mode → human label for the topbar pill. Drives only display; the engine
  *  reasons about whichever members the pedigree contains. */
@@ -196,11 +197,12 @@ export function Intake() {
   const missingCount = pedigree.members.length - presentMembers.length;
   const proband = pedigree.members.find((m) => m.role === "proband");
 
-  const stagedVcfRoles = Object.entries(staged)
-    .filter(([_, sf]) => sf && (sf.kind === "vcf" || sf.kind === "vcf_gz") && !sf.error)
+  // A member is "ready" when it has a staged VCF *or* BAM with no blocking error.
+  const stagedFileRoles = Object.entries(staged)
+    .filter(([_, sf]) => sf && (sf.kind === "vcf" || sf.kind === "vcf_gz" || sf.kind === "bam") && !sf.error)
     .map(([role]) => role);
-  const vcfReadyCount = stagedVcfRoles.length;
-  const probandStaged = !!(proband && stagedVcfRoles.includes(proband.id));
+  const vcfReadyCount = stagedFileRoles.length;
+  const probandStaged = !!(proband && stagedFileRoles.includes(proband.id));
 
   // Collision check: did the curator reassign two VCFs to the same target role?
   const targetCounts = new Map<string, number>();
@@ -238,39 +240,33 @@ export function Intake() {
 
   async function runAnalysis() {
     setRunStage("uploading");
-    setRunMsg("Uploading VCFs…");
+    setRunMsg("Uploading…");
     try {
-      // 1. For each staged VCF, request a presigned upload URL from the API, then
-      //    PUT the bytes directly to it. In prod the URL points at R2 (bytes never
-      //    touch the Worker); in dev the Vite middleware returns its own URL.
+      // 1. Upload each staged VCF/BAM straight to R2. Small files take a single
+      //    presigned PUT; large ones (BAM/CRAM, multi-GB WGS) stream as a
+      //    resumable S3 multipart upload — bytes never touch the Worker.
       for (const [role, sf] of Object.entries(staged)) {
         if (!sf || sf.kind === "bai") continue;
-        if (sf.kind === "bam") throw new Error("BAM-to-VCF calling is out of scope; please upload a VCF.");
+        if (sf.kind === "unknown" || sf.error) continue;
         const target = sf.reassignedTo ?? role;
-        const ext = sf.file.name.toLowerCase().endsWith(".gz") ? "vcf.gz" : "vcf";
-        const urlResp = await apiFetch(
-          api(`/cases/${caseId}/upload-url/${target}?filename=${encodeURIComponent(sf.file.name)}`),
-        );
-        if (!urlResp.ok) throw new Error(`signing ${role} failed: ${urlResp.status}`);
-        const { url } = await urlResp.json() as { url: string };
-        const put = await fetch(url, {
-          method: "PUT",
-          headers: { "content-type": "application/octet-stream" },
-          body: sf.file,
+        const verb = sf.kind === "bam" ? "Calling-ready BAM" : "VCF";
+        await uploadStaged(caseId, target, sf.file, (p) => {
+          setRunMsg(`Uploading ${target} (${verb}) — ${Math.round(p.fraction * 100)}%`);
         });
-        if (!put.ok) throw new Error(`upload ${role} failed: ${put.status}`);
-        setRunMsg(`Uploaded ${target}.${ext}`);
+        setRunMsg(`Uploaded ${target}`);
       }
 
-      // 2. Trigger engine run with manifest.
+      // 2. Trigger engine run with manifest. `files` records the per-role
+      //    filename incl. extension; the Worker routes .bam/.cram into the GATK
+      //    calling path and .vcf(.gz) straight into annotation.
       setRunMsg("Submitting run…");
-      // Resolve reassignments: if VCF was reassigned to a different role, key the manifest
-      // by the TARGET role, not the dropzone role.
       const files: Record<string, string> = {};
       for (const [role, sf] of Object.entries(staged)) {
-        if (!sf || (sf.kind !== "vcf" && sf.kind !== "vcf_gz")) continue;
+        if (!sf || sf.kind === "bai" || sf.kind === "unknown" || sf.error) continue;
         const target = sf.reassignedTo ?? role;
-        const ext = sf.file.name.toLowerCase().endsWith(".gz") ? "vcf.gz" : "vcf";
+        const ext = sf.kind === "bam"
+          ? "bam"
+          : sf.file.name.toLowerCase().endsWith(".gz") ? "vcf.gz" : "vcf";
         files[target] = `${target}.${ext}`;
       }
       const manifest = {

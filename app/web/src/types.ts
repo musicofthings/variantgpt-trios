@@ -97,7 +97,62 @@ export interface ClinVarRecord {
   variation_id?: string;
 }
 
+/** Engine-vs-ClinVar reconciliation for one variant (PRD §4.5). Surfaced as a
+ *  flag — the engine never lets ClinVar override its computed tier. */
+export interface ClinVarConcordance {
+  status: "concordant" | "discordant" | "uninformative";
+  engine_tier?: Tier | null;
+  clinvar_tier?: Tier | null;
+  clinvar_significance?: string | null;
+  review_stars?: number | null;
+  note?: string;
+}
+
 export type Zygosity = "hom_ref" | "het" | "hom_alt" | "missing";
+
+// ───────────────────────── structural / copy-number variants ─────────────────────────
+
+export type SVType = "DEL" | "DUP" | "INV" | "INS" | "BND" | "CNV";
+
+/** One ClinGen/ACMG 2019 (Riggs 2020) CNV scoring line. */
+export interface CnvEvidence {
+  section: string;        // "1A" | "2A" | "3" | "5A" ...
+  score: number;          // signed contribution
+  applied: boolean;
+  source?: string;
+  detail?: string;
+}
+
+export interface DosageRegion {
+  name: string;
+  kind: "gene" | "region";
+  hi_score?: number | null;
+  ts_score?: number | null;
+  pli?: number | null;
+  overlap: "full" | "partial";
+}
+
+export interface StructuralVariantRow {
+  id: string;
+  chrom: string;
+  start: number;
+  end: number;
+  sv_type: SVType;
+  length?: number | null;
+  copy_number?: number | null;
+  dosage_direction?: "loss" | "gain" | null;
+  genes: string[];
+  dosage_overlaps: DosageRegion[];
+  populations?: PopulationAF[];
+  inheritance_models: InheritanceModel[];
+  inheritance_confidence?: "high" | "medium" | "low";
+  evidence: CnvEvidence[];
+  score: number;
+  tier?: Tier | null;
+  caller?: string | null;
+  clinvar?: ClinVarRecord | null;
+  clinvar_concordance?: ClinVarConcordance | null;
+}
 
 /** The three interchangeable phenotype-ranking algorithms. */
 export type PhenotypeAlgorithm = "coverage" | "resnik" | "phrank";
@@ -170,4 +225,5 @@ export interface VariantRow {
   populations?: PopulationAF[];
   predictors?: Predictors;
   clinvar?: ClinVarRecord | null;
+  clinvar_concordance?: ClinVarConcordance | null;
 }

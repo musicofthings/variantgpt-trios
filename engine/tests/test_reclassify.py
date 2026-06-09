@@ -47,6 +47,28 @@ def test_proposal_never_auto_commits():
     assert proposal.status == "pending"
 
 
+def test_inflated_lp_demoted_when_common_in_south_asian():
+    """An LP call (e.g. a truncating allele) that turns out to be common in an
+    Indian cohort must be demotable — reclassify now runs on LP, not just VUS."""
+    v = Variant(
+        id="chr1:200:A:T", chrom="chr1", pos=200, ref="A", alt="T",
+        baseline_tier="LP", baseline_points=8,
+        evidence=[
+            EvidenceItem(criterion="PVS1", fired=True, strength="VS", points=8,
+                         source="vep+dosage", detail="predicted LoF"),
+        ],
+        populations=[
+            PopulationAF(source="gnomad_v4_global", af=0.0),
+            PopulationAF(source="indigenomes", af=0.08),  # > BA1 0.05 → stand-alone benign
+        ],
+    )
+    result = reclassify(v, snapshot_versions={})
+    assert result is not None
+    proposal, _ = result
+    assert proposal.from_tier == "LP"
+    assert proposal.to_tier == "B"  # BA1 hard override
+
+
 def test_ba1_fires_above_5_percent():
     """When IndiGen AF exceeds 5% (BA1 threshold), the variant flips Benign."""
     v = _vus_with_pm2()

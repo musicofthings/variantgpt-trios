@@ -6,6 +6,8 @@ import { PopulationFreqPanel } from "../components/PopulationFreqPanel";
 import { PredictorGauges } from "../components/PredictorGauges";
 import { RunMonitor, useJobStatus } from "../components/RunMonitor";
 import { ClinvarAudit } from "../components/ClinvarAudit";
+import { StructuralVariantsPanel } from "../components/StructuralVariantsPanel";
+import { ClinVarFlag } from "../components/ClinVarFlag";
 import { useNavigate, useParams } from "react-router-dom";
 import { useDemoCase } from "../caseData";
 import { api, apiFetch } from "../apiBase";
@@ -31,76 +33,6 @@ const TABS: { label: string; match: (v: VariantRow) => boolean }[] = [
   { label: "Reclassified",     match: (v) => v.reclass != null },
 ];
 
-const FALLBACK_MOCK: VariantRow[] = [
-  {
-    id: "chr2:179454920:G:A",
-    gene: "TTN", hgvs_c: "c.41329C>T", hgvs_p: "p.Arg13777*",
-    transcript: "NM_001267550.2",
-    consequence: "stop_gained",
-    inheritance_models: ["de_novo"],
-    af_global: 0.0, af_sas: 0.0, af_indi: 0.0,
-    baseline_tier: "LP", reclass: null, priority_score: 0.82,
-    evidence: [
-      { criterion: "PVS1", polarity: "P", fired: true, strength: "Strong",
-        summary: "Predicted LoF in gene where LoF is established mechanism",
-        trigger: "stop_gained; not in last exon; predicted NMD", source: "VEP + ClinGen PVS1 tree" },
-      { criterion: "PS2",  polarity: "P", fired: true, strength: "Strong",
-        summary: "Confirmed de novo (parentage supported)",
-        trigger: "Proband 0/1; Father 0/0 (DP=42); Mother 0/0 (DP=38)", source: "Trio joint call" },
-      { criterion: "PM2",  polarity: "P", fired: true, strength: "Supporting",
-        summary: "Absent from controls in population databases",
-        trigger: "gnomAD v4 AC=0/1,613,820; IndiGenomes AC=0", source: "gnomAD v4, IndiGenomes" },
-      { criterion: "PP3",  polarity: "P", fired: true, strength: "Supporting",
-        summary: "In-silico predictors concordant for damaging",
-        trigger: "CADD=34.0; SpliceAI=0.02", source: "dbNSFP, SpliceAI" },
-      { criterion: "PM1",  polarity: "P", fired: false },
-      { criterion: "PP1",  polarity: "P", fired: false },
-      { criterion: "BA1",  polarity: "B", fired: false },
-      { criterion: "BS1",  polarity: "B", fired: false },
-      { criterion: "BS2",  polarity: "B", fired: false },
-      { criterion: "BP4",  polarity: "B", fired: false },
-    ],
-    populations: [
-      { source: "gnomad_global", af: 0 },
-      { source: "gnomad_sas",    af: 0 },
-      { source: "indigenomes",   af: 0 },
-      { source: "genomeasia",    af: 0 },
-    ],
-    predictors: { alphamissense: 0.91, revel: 0.82, cadd: 34.0, spliceai: 0.02 },
-  },
-  {
-    id: "chr11:5226764:C:T",
-    gene: "HBB", hgvs_c: "c.20A>T", hgvs_p: "p.Glu7Val",
-    transcript: "NM_000518.5",
-    consequence: "missense_variant",
-    inheritance_models: ["ar_hom"],
-    af_global: 0.0003, af_sas: 0.012, af_indi: 0.019,
-    baseline_tier: "VUS",
-    reclass: { from: "VUS", to: "LB", delta: -5, criteria: ["PM2 retracted", "BS1"] },
-    priority_score: 0.61,
-    evidence: [
-      { criterion: "PM2",  polarity: "P", fired: false, summary: "Retracted: present at AF 0.019 in IndiGenomes",
-        trigger: "IndiGenomes AF=0.019; gnomAD-sas AF=0.012", source: "South Asian reclass" },
-      { criterion: "PP3",  polarity: "P", fired: true, strength: "Supporting",
-        summary: "REVEL above calibrated supporting threshold",
-        trigger: "REVEL=0.71", source: "dbNSFP" },
-      { criterion: "BA1",  polarity: "B", fired: false },
-      { criterion: "BS1",  polarity: "B", fired: true, strength: "Strong",
-        summary: "AF > 1% in a South Asian source — exceeds BS1 threshold",
-        trigger: "IndiGenomes AF=0.019 > 0.01", source: "IndiGenomes v1.1" },
-      { criterion: "BS2",  polarity: "B", fired: false },
-      { criterion: "BP4",  polarity: "B", fired: false },
-    ],
-    populations: [
-      { source: "gnomad_global", af: 0.0003 },
-      { source: "gnomad_sas",    af: 0.012  },
-      { source: "indigenomes",   af: 0.019  },
-      { source: "genomeasia",    af: 0.014  },
-    ],
-    predictors: { alphamissense: 0.42, revel: 0.71, cadd: 22.5, spliceai: 0.01 },
-  },
-];
-
 export function Workbench() {
   const navigate = useNavigate();
   const [tab, setTab] = useState<string>("All");
@@ -119,14 +51,15 @@ export function Workbench() {
 
   const { caseId } = useParams<{ caseId: string }>();
   const { data, loading, error } = useDemoCase(caseId);
-  const isUploadedCase = !!caseId && caseId !== "demo-trio-001" && caseId !== "demo";
+  const isUploadedCase = !!caseId;
   // Always poll job-status for uploaded cases. If a re-run is in flight even
   // though we have stale case.json, we want to surface a live progress banner
   // and auto-reload when status flips back to ready.
   const job = useJobStatus(isUploadedCase ? caseId : undefined);
   const showMonitor = isUploadedCase && !data && (job?.status !== "ready" || error);
-  const variants: VariantRow[] = data?.variants ?? (error && !isUploadedCase ? FALLBACK_MOCK : []);
-  const caseName = data?.caseRow.name ?? (isUploadedCase ? `Case ${caseId}` : "Demo trio (loading…)");
+  const variants: VariantRow[] = data?.variants ?? [];
+  const structuralVariants = data?.structural_variants ?? [];
+  const caseName = data?.caseRow.name ?? (isUploadedCase ? `Case ${caseId}` : "No case selected");
 
   // Banner is dismissible per-case. Once the user clicks ✕ on the banner
   // for a given case+startedAt, we stop showing it. Returns automatically
@@ -347,6 +280,11 @@ export function Workbench() {
         variants={variants}
         onSelectVariant={(id) => setSelectedId(id)}
       />
+
+      {/* Structural / copy-number variants — separate ClinGen-2019 classifier
+          with its own evidence ledger + ClinVar-SV concordance. Hides itself
+          when the case has no SV/CNV calls. */}
+      <StructuralVariantsPanel svs={structuralVariants} />
 
       {/* Pipeline-capability banner — explicit for singleton/duo modes so
           curators see why some criteria are weaker than they'd be in a
@@ -690,6 +628,12 @@ function Drawer({
             Awaiting your decision. Decisions are audit-logged and irreversible.
           </div>
         </div>
+      ) : null}
+
+      {variant.clinvar_concordance ? (
+        <Section title="ClinVar concordance">
+          <ClinVarFlag concordance={variant.clinvar_concordance} />
+        </Section>
       ) : null}
 
       <Section title="Evidence ledger">

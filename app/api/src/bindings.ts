@@ -46,6 +46,25 @@ export type Bindings = {
     limit(opts: { key: string }): Promise<{ success: boolean }>;
   };
 
+  /** Reference genome for GATK calling from uploaded BAM/CRAM. R2 keys (under
+   *  the `variantgpt` bucket). REFERENCE_FASTA_KEY is required to accept BAM
+   *  uploads; the .fai / .dict and known-sites resources are optional but
+   *  recommended (no BQSR without known sites). KNOWN_SITES_KEYS is a
+   *  comma-separated list of R2 keys (dbSNP / Mills / 1000G). */
+  REFERENCE_FASTA_KEY?: string;
+  REFERENCE_FAI_KEY?: string;
+  REFERENCE_DICT_KEY?: string;
+  KNOWN_SITES_KEYS?: string;
+
+  /** GATK gCNV panel-of-normals bundle for calling germline CNVs from uploaded
+   *  BAMs. GCNV_MODEL_TGZ_KEY is an R2 key for a tarball containing the
+   *  `ploidy-model/` and `cnv-model/` dirs (built once from a panel of
+   *  normals); GCNV_INTERVALS_KEY is the preprocessed/filtered interval list.
+   *  When both are set and a BAM is uploaded, the engine runs gCNV → AnnotSV →
+   *  ClinGen-2019 CNV classification. */
+  GCNV_MODEL_TGZ_KEY?: string;
+  GCNV_INTERVALS_KEY?: string;
+
   /** Optional Cloudflare Browser Rendering REST token (account API token with
    *  the Browser Rendering permission). When set (alongside R2_ACCOUNT_ID, which
    *  is the same Cloudflare account id), POST /api/cases/:id/report?format=pdf
