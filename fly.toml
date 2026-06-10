@@ -15,6 +15,16 @@ primary_region = "iad"          # change to closer region (e.g. "bom" for Mumbai
 [build]
   dockerfile = "engine/Dockerfile"
 
+# Persistent storage for the AnnotSV annotation databases (the image is built
+# with INSTALL_ANNOTSV_DB=false to stay lean). The volume is mounted over
+# AnnotSV's share/ dir; populate it ONCE with tracks/populate_annotsv_db.sh
+# (see infra/DEPLOY_BAM_SV.md). Until populated, the per-case CNV/AnnotSV step
+# degrades gracefully (SNV calling is unaffected). Create the volume first:
+#   fly volumes create annotsv_data --size 10 --region <region>
+[[mounts]]
+  source = "annotsv_data"
+  destination = "/opt/AnnotSV/share"
+
 [env]
   PORT = "8080"
   VGPT_DEBUG = "0"

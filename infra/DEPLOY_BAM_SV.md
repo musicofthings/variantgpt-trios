@@ -54,6 +54,22 @@ fly deploy   # from repo root (fly.toml)
   (restrict `origins` from `*` to your SPA origin for production).
 - Deploy: `wrangler deploy` (from `app/api`).
 
+## 4b. AnnotSV annotation DB (required for CNV annotation)
+The image is built lean (`INSTALL_ANNOTSV_DB=false`), so AnnotSV's ~3 GB human
+databases live on a Fly volume mounted at `/opt/AnnotSV/share` (see `[[mounts]]`
+in `fly.toml`). Set it up once:
+```
+fly volumes create annotsv_data --size 10 --region <your-region>   # match primary_region
+fly deploy --remote-only                                           # picks up the mount
+fly ssh console
+  bash /app/tracks/populate_annotsv_db.sh                          # multi-GB download, one-time
+  exit
+```
+Until this is done, CNV calling runs but the AnnotSV step is skipped gracefully
+(`SV/CNV: ... failed (continuing without)` in logs); SNV calling is unaffected.
+Note: the volume is per-machine — if you scale beyond `min_machines_running=1`,
+each machine needs its own populated volume.
+
 ## 5. Smoke test
 Upload a small exome BAM as the proband, run a case, confirm `case.json` has
 `variants` (from GATK→annotation) and — if the PON is configured —
