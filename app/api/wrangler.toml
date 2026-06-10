@@ -46,8 +46,10 @@ ENGINE_BASE_URL = "https://variantgpt-engine.fly.dev"
 REFERENCE_FASTA_KEY = "refs/GRCh38/Homo_sapiens_assembly38.fasta"
 REFERENCE_FAI_KEY   = "refs/GRCh38/Homo_sapiens_assembly38.fasta.fai"
 REFERENCE_DICT_KEY  = "refs/GRCh38/Homo_sapiens_assembly38.dict"
-# Comma-separated known-sites VCFs for BQSR (optional — BQSR is skipped if empty).
-KNOWN_SITES_KEYS    = "refs/GRCh38/Homo_sapiens_assembly38.dbsnp138.vcf.gz,refs/GRCh38/Mills_and_1000G_gold_standard.indels.hg38.vcf.gz"
+# Known-sites VCFs for BQSR (optional — BQSR is skipped if empty). Left empty:
+# the R2-download path doesn't fetch the .idx/.tbi indexes GATK needs, so for
+# BQSR mount indexed known-sites on a Fly volume via KNOWN_SITES_PATHS instead.
+KNOWN_SITES_KEYS    = ""
 
 # ── gCNV panel-of-normals bundle for CNV calling (optional) ──────────────────
 # Build once with `variantgpt-engine build-pon`, upload the two outputs to these
