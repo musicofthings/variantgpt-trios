@@ -9,15 +9,14 @@
 # NOTE (unverified build): version pins + download URLs below were not built in
 # the dev environment. Confirm GATK/AnnotSV versions on the first `fly deploy`
 # and adjust the ARGs if a download 404s.
-FROM python:3.12-slim
+FROM python:3.12-slim-bookworm
 
 ARG GATK_VERSION=4.5.0.0
-ARG ANNOTSV_VERSION=3.4.2
+ARG ANNOTSV_VERSION=v3.4.2
 # AnnotSV's human annotation DB is ~3 GB. Baking it in makes a large but
 # self-contained image. Set to "false" to skip it and instead mount the DB at
 # $ANNOTSV/share via a Fly volume.
-ARG INSTALL_ANNOTSV_DB=true
-
+ARG INSTALL_ANNOTSV_DB=false
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -50,15 +49,17 @@ RUN curl -fsSL -o /tmp/gatk.zip \
 # Installs the AnnotSV binary into $ANNOTSV. The annotation databases are
 # downloaded only when INSTALL_ANNOTSV_DB=true (slow). The `AnnotSV` symlink is
 # what sv_calling.annotate_with_annotsv invokes.
-RUN git clone --depth 1 --branch "v${ANNOTSV_VERSION}" https://github.com/lgmgeo/AnnotSV.git /tmp/AnnotSV \
-    && make -C /tmp/AnnotSV PREFIX="${ANNOTSV}" install \
-    && rm -rf /tmp/AnnotSV \
-    && ln -s "${ANNOTSV}/bin/AnnotSV" /usr/local/bin/AnnotSV
-RUN if [ "$INSTALL_ANNOTSV_DB" = "true" ]; then \
-        "${ANNOTSV}/bin/INSTALL_annotations.sh" --install-dir "${ANNOTSV}/share" ; \
-    else \
-        echo "Skipping AnnotSV DB — mount it at ${ANNOTSV}/share via a volume." ; \
-    fi
+# Install AnnotSV and optionally download its human annotation datasets
+RUN git clone --depth 1 --branch "${ANNOTSV_VERSION}" \
+        https://github.com/lgmgeo/AnnotSV.git /tmp/AnnotSV \
+    && cd /tmp/AnnotSV \
+    && make PREFIX="${ANNOTSV}" install \
+    && if [ "${INSTALL_ANNOTSV_DB}" = "true" ]; then \
+           make PREFIX="${ANNOTSV}" install-human-annotation ; \
+       else \
+           echo "Skipping AnnotSV DB — mount it at ${ANNOTSV}/share via a volume." ; \
+       fi \
+    && rm -rf /tmp/AnnotSV
 
 # --- Engine source ---
 COPY engine/pyproject.toml /app/engine/pyproject.toml
@@ -82,3 +83,4 @@ EXPOSE 8080
 
 # tracks/container_server.py exposes POST /run and GET /healthz on :8080.
 CMD ["python", "-m", "uvicorn", "tracks.container_server:app", "--host", "0.0.0.0", "--port", "8080"]
+
