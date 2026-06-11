@@ -25,9 +25,18 @@ primary_region = "iad"          # change to closer region (e.g. "bom" for Mumbai
   source = "annotsv_data"
   destination = "/opt/AnnotSV/share"
 
+# Reference genome + BWA index for FASTQ->BAM alignment and GATK calling. Built
+# once onto the volume by tracks/build_reference_volume.sh (downloads the GRCh38
+# FASTA/.fai/.dict + `bwa index`). REFERENCE_FASTA_PATH points the engine at it
+# so it doesn't re-download a multi-GB reference per case.
+[[mounts]]
+  source = "refs_data"
+  destination = "/refs"
+
 [env]
   PORT = "8080"
   VGPT_DEBUG = "0"
+  REFERENCE_FASTA_PATH = "/refs/Homo_sapiens_assembly38.fasta"
 
 [http_service]
   internal_port = 8080
