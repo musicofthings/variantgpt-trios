@@ -1073,13 +1073,15 @@ apiRouter.post("/cases/:id/recover", async (c) => {
     return c.json({ error: "no uploads in R2 for this caseId" }, 404);
   }
 
-  const roles: { role: string; r2_key: string; filename: string }[] = [];
+  const roles: { role: string; mate: string; r2_key: string; filename: string }[] = [];
   for (const obj of inner.objects) {
-    // key shape: cases/<id>/uploads/<role>.<ext>
+    // key shape: cases/<id>/uploads/<role>[.<mate>].<ext>  (mate = R1/R2 for FASTQ)
     const fname = obj.key.split("/").pop() ?? "";
-    const role = fname.split(".")[0];
+    const parts = fname.split(".");
+    const role = parts[0];
+    const mate = parts[1] === "R1" || parts[1] === "R2" ? parts[1] : "";
     if (!role || !ALLOWED_ROLES.has(role)) continue;
-    roles.push({ role, r2_key: obj.key, filename: fname });
+    roles.push({ role, mate, r2_key: obj.key, filename: fname });
   }
   if (roles.length === 0) {
     return c.json({ error: "no valid role files found (expected proband/father/mother)" }, 400);
@@ -1090,15 +1092,19 @@ apiRouter.post("/cases/:id/recover", async (c) => {
     `INSERT INTO cases (id, name, status) VALUES (?, ?, 'draft')
      ON CONFLICT(id) DO NOTHING`,
   ).bind(id, `Recovered ${id}`).run();
-  // Rebuild the uploads rows.
+  // Rebuild the uploads rows (PK is (case_id, role, mate) since migration 0003).
   for (const r of roles) {
     await c.env.DB.prepare(
-      `INSERT INTO uploads (case_id, role, r2_key, filename, uploaded_at)
-       VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT(case_id, role) DO UPDATE SET r2_key=excluded.r2_key`,
-    ).bind(id, r.role, r.r2_key, r.filename, Date.now()).run();
+      `INSERT INTO uploads (case_id, role, mate, r2_key, filename, uploaded_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(case_id, role, mate) DO UPDATE SET r2_key=excluded.r2_key`,
+    ).bind(id, r.role, r.mate, r.r2_key, r.filename, Date.now()).run();
   }
-  return c.json({ ok: true, role_count: roles.length, files: roles.map((r) => r.role) });
+  return c.json({
+    ok: true,
+    role_count: roles.length,
+    files: roles.map((r) => (r.mate ? `${r.role}.${r.mate}` : r.role)),
+  });
 });
 
 /**
