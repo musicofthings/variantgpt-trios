@@ -42,12 +42,28 @@ tracks/cache/
 *.vcf.gz
 *.vcf.gz.tbi
 *.bam
+*.bai
+*.bam.bai
 *.cram
+*.crai
+# Raw reads (FASTQ) — the rawest PHI; never commit.
+*.fastq
+*.fq
+*.fastq.gz
+*.fq.gz
 !data/test/demo_trio/*.vcf
+
+# Engine case output — never commit per-case results.
+case.json
+!data/test/**/case.json
 
 # Reports
 *.pdf
 !docs/**/*.pdf
+
+# IDE / agent-generated MCP descriptors — can steer agents toward local case
+# directories (security.md §2.1, §7). Never commit.
+mcps/
 
 # Env
 .env
