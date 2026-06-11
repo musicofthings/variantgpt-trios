@@ -22,11 +22,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     ANNOTSV=/opt/AnnotSV
-# AnnotSV resolves its Tcl library dir relative to argv[0], so it must run from
-# its REAL path (/opt/AnnotSV/bin/AnnotSV) — a /usr/local/bin symlink breaks it.
-# Put its bin dir on PATH instead so `AnnotSV` (as the engine invokes it via
-# subprocess) resolves to the real binary.
-ENV PATH="/opt/AnnotSV/bin:${PATH}"
 
 WORKDIR /app
 
@@ -51,8 +46,11 @@ RUN curl -fsSL -o /tmp/gatk.zip \
     && gatk --version
 
 # --- AnnotSV ---
-# Installs the AnnotSV binary into $ANNOTSV/bin (on PATH via the ENV above —
-# sv_calling.annotate_with_annotsv invokes it as `AnnotSV`). The annotation
+# Installs the AnnotSV binary into $ANNOTSV/bin. We expose it as a /usr/local/bin
+# WRAPPER that exec's the real path — NOT a symlink: AnnotSV resolves its Tcl
+# library dir relative to argv[0], so a symlink makes it look in the wrong place,
+# whereas `exec /opt/AnnotSV/bin/AnnotSV` preserves the real path. The engine
+# (sv_calling.annotate_with_annotsv) invokes it as `AnnotSV`. Annotation
 # databases are downloaded only when INSTALL_ANNOTSV_DB=true; otherwise they're
 # mounted from a Fly volume at $ANNOTSV/share (see infra/DEPLOY_BAM_SV.md).
 # Install AnnotSV and optionally download its human annotation datasets
@@ -60,6 +58,8 @@ RUN git clone --depth 1 --branch "${ANNOTSV_VERSION}" \
         https://github.com/lgmgeo/AnnotSV.git /tmp/AnnotSV \
     && cd /tmp/AnnotSV \
     && make PREFIX="${ANNOTSV}" install \
+    && printf '#!/bin/sh\nexec /opt/AnnotSV/bin/AnnotSV "$@"\n' > /usr/local/bin/AnnotSV \
+    && chmod +x /usr/local/bin/AnnotSV \
     && if [ "${INSTALL_ANNOTSV_DB}" = "true" ]; then \
            make PREFIX="${ANNOTSV}" install-human-annotation ; \
        else \
