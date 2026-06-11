@@ -107,8 +107,104 @@ def test_run_case_bam_without_reference_errors():
 
 def test_run_case_requires_some_input():
     from variantgpt_engine.pipeline import run_case
-    with pytest.raises(ValueError, match="vcf_paths or bam_paths"):
+    with pytest.raises(ValueError, match="vcf_paths, bam_paths, or fastq_paths"):
         run_case("c1", _ped(), hpo_ids=[])
+
+
+# ───────────────────────── FASTQ → BAM alignment ─────────────────────────
+
+def _install_fake_reads(monkeypatch):
+    """Stub bwa + samtools + gatk: record argv, create `-O`/sort `-o` outputs.
+    Also stubs subprocess.Popen for the bwa-mem | samtools-sort pipe."""
+    import io
+    calls: list[list[str]] = []
+
+    class FakePopen:
+        def __init__(self, cmd, stdout=None, **kw):
+            calls.append(list(cmd))
+            self.stdout = io.BytesIO(b"")
+
+        def wait(self):
+            return 0
+
+    def fake_run(cmd, check=False, stdin=None, **kw):  # noqa: ARG001
+        calls.append(list(cmd))
+        if cmd[0] == "samtools" and len(cmd) > 1 and cmd[1] == "sort" and "-o" in cmd:
+            out = Path(cmd[cmd.index("-o") + 1]); out.parent.mkdir(parents=True, exist_ok=True); out.write_bytes(b"")
+        if "-O" in cmd:
+            out = Path(cmd[cmd.index("-O") + 1])
+            if out.suffix:
+                out.parent.mkdir(parents=True, exist_ok=True); out.write_bytes(b"")
+            else:
+                out.mkdir(parents=True, exist_ok=True)
+        class _R:
+            returncode = 0
+        return _R()
+
+    monkeypatch.setattr(bam_calling.shutil, "which", lambda t: f"/usr/bin/{t}")
+    monkeypatch.setattr(bam_calling.subprocess, "run", fake_run)
+    monkeypatch.setattr(bam_calling.subprocess, "Popen", FakePopen)
+    return calls
+
+
+def test_align_fastq_paired_end(tmp_path, monkeypatch):
+    calls = _install_fake_reads(monkeypatch)
+    r1 = tmp_path / "p_R1.fastq.gz"; r1.write_bytes(b"")
+    r2 = tmp_path / "p_R2.fastq.gz"; r2.write_bytes(b"")
+    ref = tmp_path / "ref.fasta"; ref.write_bytes(b"")
+
+    bam = bam_calling.align_fastq(r1, ref, tmp_path / "p.sorted.bam", sample_id="p", fastq_r2=r2)
+
+    bwa = next(c for c in calls if c[0] == "bwa" and c[1] == "mem")
+    assert "-R" in bwa and "@RG" in bwa[bwa.index("-R") + 1] and "SM:p" in bwa[bwa.index("-R") + 1]
+    assert str(r1) in bwa and str(r2) in bwa  # paired-end: both FASTQs
+    assert any(c[0] == "samtools" and c[1] == "sort" for c in calls)
+    assert any(c[0] == "samtools" and c[1] == "index" for c in calls)
+    assert bam.exists()
+
+
+def test_align_fastq_single_end_omits_r2(tmp_path, monkeypatch):
+    calls = _install_fake_reads(monkeypatch)
+    r1 = tmp_path / "p.fastq.gz"; r1.write_bytes(b"")
+    ref = tmp_path / "ref.fasta"; ref.write_bytes(b"")
+    bam_calling.align_fastq(r1, ref, tmp_path / "p.sorted.bam", sample_id="p")
+    bwa = next(c for c in calls if c[0] == "bwa")
+    # exactly one FASTQ positional (single-end)
+    assert sum(1 for tok in bwa if tok.endswith(".fastq.gz")) == 1
+
+
+def test_call_sample_vcf_from_fastq_chains_align_then_gatk(tmp_path, monkeypatch):
+    calls = _install_fake_reads(monkeypatch)
+    r1 = tmp_path / "p_R1.fastq.gz"; r1.write_bytes(b"")
+    r2 = tmp_path / "p_R2.fastq.gz"; r2.write_bytes(b"")
+    ref = tmp_path / "ref.fasta"; ref.write_bytes(b"")
+
+    vcf = bam_calling.call_sample_vcf_from_fastq(
+        r1, ref, tmp_path / "work", sample_id="p", fastq_r2=r2,
+    )
+    tools = [c[1] if c[0] == "gatk" else c[0] for c in calls]
+    # alignment first, then the germline calling chain.
+    assert tools[0] == "bwa"
+    assert "MarkDuplicates" in tools and "HaplotypeCaller" in tools and "GenotypeGVCFs" in tools
+    assert vcf.exists() and vcf.name == "p.vcf.gz"
+
+
+def test_call_all_from_fastq_one_vcf_per_role(tmp_path, monkeypatch):
+    _install_fake_reads(monkeypatch)
+    ref = tmp_path / "ref.fasta"; ref.write_bytes(b"")
+    fq = {}
+    for role in ("proband", "mother"):
+        r1 = tmp_path / f"{role}_R1.fq.gz"; r1.write_bytes(b"")
+        r2 = tmp_path / f"{role}_R2.fq.gz"; r2.write_bytes(b"")
+        fq[role] = (r1, r2)
+    out = bam_calling.call_all_from_fastq(fq, ref, tmp_path / "work")
+    assert set(out) == {"proband", "mother"} and all(p.exists() for p in out.values())
+
+
+def test_run_case_fastq_without_reference_errors():
+    from variantgpt_engine.pipeline import run_case
+    with pytest.raises(ValueError, match="reference"):
+        run_case("c1", _ped(), fastq_paths={"p": (Path("p_R1.fq.gz"), Path("p_R2.fq.gz"))}, hpo_ids=[])
 
 
 # ───────────────────────── gCNV → AnnotSV orchestration ─────────────────────────

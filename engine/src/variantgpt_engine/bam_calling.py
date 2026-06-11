@@ -121,3 +121,104 @@ def call_all(
             known_sites=known_sites, intervals=intervals, do_bqsr=do_bqsr,
         )
     return out
+
+
+# ───────────────────────── FASTQ → aligned BAM (BWA-MEM) ─────────────────────────
+#
+# Upstream of the BAM path: when the raw data is FASTQ (not aligned), align it
+# first. GATK best practice is BWA-MEM with a read group, then coordinate-sort.
+# We use CLASSIC `bwa` by default — its ~5.5 GB human index fits an 8 GB machine;
+# bwa-mem2 is faster but needs ~10 GB RAM. The reference must carry a BWA index
+# (bwa index reference.fasta → .amb/.ann/.bwt/.pac/.sa) alongside the FASTA.
+
+
+def index_reference_bwa(reference: Path, aligner: str = "bwa") -> None:
+    """Build the BWA index next to the reference (one-time; ~1 h for the human
+    genome). Produces reference.fasta.{amb,ann,bwt,pac,sa}."""
+    _require(aligner)
+    subprocess.run([aligner, "index", str(reference)], check=True)
+
+
+def align_fastq(
+    fastq_r1: Path,
+    reference: Path,
+    out_bam: Path,
+    *,
+    sample_id: str,
+    fastq_r2: Optional[Path] = None,
+    threads: int = 4,
+    read_group: Optional[str] = None,
+    aligner: str = "bwa",
+) -> Path:
+    """Align FASTQ(.gz) to the reference and emit a coordinate-sorted, indexed BAM.
+
+    Paired-end when fastq_r2 is given (the usual case), else single-end. Streams
+    BWA-MEM straight into `samtools sort` so the unsorted SAM never hits disk.
+    A read group is attached (required by MarkDuplicates / HaplotypeCaller)."""
+    _require(aligner)
+    _require("samtools")
+    out_bam.parent.mkdir(parents=True, exist_ok=True)
+    rg = read_group or f"@RG\\tID:{sample_id}\\tSM:{sample_id}\\tPL:ILLUMINA\\tLB:{sample_id}"
+    cmd = [aligner, "mem", "-t", str(threads), "-R", rg, str(reference), str(fastq_r1)]
+    if fastq_r2 is not None:
+        cmd.append(str(fastq_r2))
+    aln = subprocess.Popen(cmd, stdout=subprocess.PIPE)
+    try:
+        subprocess.run(
+            ["samtools", "sort", "-@", str(threads), "-o", str(out_bam), "-"],
+            stdin=aln.stdout, check=True,
+        )
+    finally:
+        if aln.stdout is not None:
+            aln.stdout.close()
+        rc = aln.wait()
+    if rc != 0:
+        raise RuntimeError(f"{aligner} mem failed (exit {rc}) for sample {sample_id}")
+    subprocess.run(["samtools", "index", str(out_bam)], check=True)
+    return out_bam
+
+
+def call_sample_vcf_from_fastq(
+    fastq_r1: Path,
+    reference: Path,
+    work_dir: Path,
+    *,
+    sample_id: str,
+    fastq_r2: Optional[Path] = None,
+    known_sites: Optional[list[Path]] = None,
+    intervals: Optional[Path] = None,
+    do_bqsr: bool = True,
+    threads: int = 4,
+) -> Path:
+    """FASTQ → analysis-ready VCF: BWA-MEM alignment, then the germline
+    short-variant flow (MarkDuplicates → BQSR → HaplotypeCaller → GenotypeGVCFs)."""
+    work_dir.mkdir(parents=True, exist_ok=True)
+    aligned = align_fastq(
+        fastq_r1, reference, work_dir / f"{sample_id}.sorted.bam",
+        sample_id=sample_id, fastq_r2=fastq_r2, threads=threads,
+    )
+    return call_sample_vcf(
+        aligned, reference, work_dir, sample_id=sample_id,
+        known_sites=known_sites, intervals=intervals, do_bqsr=do_bqsr,
+    )
+
+
+def call_all_from_fastq(
+    fastq_paths: dict[str, tuple[Path, Optional[Path]]],
+    reference: Path,
+    work_dir: Path,
+    *,
+    known_sites: Optional[list[Path]] = None,
+    intervals: Optional[Path] = None,
+    do_bqsr: bool = True,
+    threads: int = 4,
+) -> dict[str, Path]:
+    """Align + call every member's FASTQ → role→VCF, ready for joint.merge.
+    fastq_paths maps role → (R1, R2|None)."""
+    out: dict[str, Path] = {}
+    for role, (r1, r2) in fastq_paths.items():
+        out[role] = call_sample_vcf_from_fastq(
+            r1, reference, work_dir / role, sample_id=role, fastq_r2=r2,
+            known_sites=known_sites, intervals=intervals, do_bqsr=do_bqsr, threads=threads,
+        )
+    return out

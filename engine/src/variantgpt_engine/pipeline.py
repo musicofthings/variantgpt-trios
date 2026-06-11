@@ -15,7 +15,7 @@ from typing import Optional
 from .acmg import augment_context_evidence, classify
 from .acmg.concordance import assess_all, assess_svs
 from .annotation import AnnotationContext, annotate
-from .bam_calling import call_all
+from .bam_calling import call_all, call_all_from_fastq
 from .build_detect import detect_build
 from .inheritance import assign_models, compound_het_pass
 from .joint import merge
@@ -37,22 +37,31 @@ def run_case(
     sv_annotsv_tsv: Optional[Path] = None,
     sv_calls_by_sv: Optional[dict[str, list[MemberCall]]] = None,
     bam_paths: Optional[dict[str, Path]] = None,
+    fastq_paths: Optional[dict[str, tuple[Path, Optional[Path]]]] = None,
     work_dir: Optional[Path] = None,
     known_sites: Optional[list[Path]] = None,
     intervals: Optional[Path] = None,
 ) -> CaseEmission:
     hpo_ids = hpo_ids or []
+    wd = work_dir or Path(f".variantgpt_work/{case_id}")
 
+    # Raw-reads path: align per-member FASTQ (BWA-MEM) → BAM → GATK calling →
+    # VCF, then continue exactly as the VCF path does. Requires a reference with
+    # a BWA index alongside it.
+    if fastq_paths:
+        if reference is None:
+            raise ValueError("fastq_paths supplied but no reference FASTA — alignment needs --reference")
+        vcf_paths = call_all_from_fastq(fastq_paths, reference, wd / "calls",
+                                        known_sites=known_sites, intervals=intervals)
     # Aligned-reads path: call per-member VCFs from BAM/CRAM with GATK best
     # practices, then continue exactly as the VCF path does. Requires a reference.
-    if bam_paths:
+    elif bam_paths:
         if reference is None:
             raise ValueError("bam_paths supplied but no reference FASTA — GATK calling needs --reference")
-        wd = work_dir or Path(f".variantgpt_work/{case_id}")
         vcf_paths = call_all(bam_paths, reference, wd / "calls",
                              known_sites=known_sites, intervals=intervals)
     if not vcf_paths:
-        raise ValueError("run_case requires either vcf_paths or bam_paths")
+        raise ValueError("run_case requires vcf_paths, bam_paths, or fastq_paths")
 
     resolved_build = _resolve_build(build, vcf_paths)
 

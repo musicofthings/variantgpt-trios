@@ -27,11 +27,14 @@ WORKDIR /app
 
 # --- System toolchain ---
 #   openjdk-17        GATK runtime (GATK 4.5 needs Java 17)
+#   bwa               FASTQ -> BAM alignment (classic bwa; ~5.5 GB human index
+#                     fits an 8 GB machine, unlike bwa-mem2 at ~10 GB)
 #   samtools/bcftools BAM/CRAM + VCF handling
 #   bedtools, tabix   AnnotSV dependencies + bgzip/tabix
 #   tcl               AnnotSV is Tcl-based
 RUN apt-get update && apt-get install -y --no-install-recommends \
         openjdk-17-jre-headless \
+        bwa \
         samtools bcftools bedtools tabix \
         tcl \
         curl unzip git ca-certificates procps make \
