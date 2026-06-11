@@ -22,10 +22,20 @@ export const apiRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>(
 
 const SAFE_ID = /^[a-zA-Z0-9_-]{1,64}$/;
 const ALLOWED_ROLES = new Set(["proband", "father", "mother", "sibling", "relative"]);
-const ALLOWED_EXTS = new Set(["vcf", "vcf.gz", "bam"]);
+const ALLOWED_EXTS = new Set(["vcf", "vcf.gz", "bam", "cram", "fastq.gz", "fq.gz"]);
+// FASTQ is paired: a member has an R1 and R2 upload. VCF/BAM use mate=''.
+const ALLOWED_MATES = new Set(["", "R1", "R2"]);
 
 function sanitize(id: string): string | null {
   return SAFE_ID.test(id) ? id : null;
+}
+
+/** R2 object key for an uploaded blob. FASTQ encodes the mate so R1/R2 don't
+ *  collide: cases/<id>/uploads/<role>.R1.fastq.gz */
+function uploadKey(id: string, role: string, mate: string, ext: string): string {
+  return mate
+    ? `cases/${id}/uploads/${role}.${mate}.${ext}`
+    : `cases/${id}/uploads/${role}.${ext}`;
 }
 
 function r2Endpoint(accountId: string) {
@@ -98,6 +108,9 @@ function pickExt(filename: string | undefined): string | null {
   if (lower.endsWith(".vcf.gz")) return "vcf.gz";
   if (lower.endsWith(".vcf")) return "vcf";
   if (lower.endsWith(".bam")) return "bam";
+  if (lower.endsWith(".cram")) return "cram";
+  if (lower.endsWith(".fastq.gz")) return "fastq.gz";
+  if (lower.endsWith(".fq.gz")) return "fq.gz";
   return null;
 }
 
@@ -153,14 +166,16 @@ apiRouter.get("/cases/:id/upload-url/:role", async (c) => {
   const id = sanitize(c.req.param("id"));
   const role = c.req.param("role");
   const filename = c.req.query("filename");
+  const mate = c.req.query("mate") ?? "";
   if (!id) return c.json({ error: "bad caseId" }, 400);
   if (!ALLOWED_ROLES.has(role)) return c.json({ error: "bad role" }, 400);
+  if (!ALLOWED_MATES.has(mate)) return c.json({ error: "bad mate (allowed: R1, R2)" }, 400);
   const ext = pickExt(filename ?? undefined);
   if (!ext || !ALLOWED_EXTS.has(ext)) {
-    return c.json({ error: "unsupported file extension (allowed: vcf, vcf.gz, bam)" }, 400);
+    return c.json({ error: "unsupported file extension (allowed: vcf, vcf.gz, bam, cram, fastq.gz, fq.gz)" }, 400);
   }
 
-  const key = `cases/${id}/uploads/${role}.${ext}`;
+  const key = uploadKey(id, role, mate, ext);
   const url = await signR2(c.env, "variantgpt", key, "PUT", 3600);
 
   // The case row MUST exist before the uploads row — uploads.case_id has a
@@ -170,13 +185,13 @@ apiRouter.get("/cases/:id/upload-url/:role", async (c) => {
      ON CONFLICT(id) DO NOTHING`,
   ).bind(id, `Case ${id}`).run();
   await c.env.DB.prepare(
-    `INSERT INTO uploads (case_id, role, r2_key, filename, uploaded_at)
-     VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(case_id, role) DO UPDATE SET
+    `INSERT INTO uploads (case_id, role, mate, r2_key, filename, uploaded_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(case_id, role, mate) DO UPDATE SET
        r2_key=excluded.r2_key, filename=excluded.filename, uploaded_at=excluded.uploaded_at`,
-  ).bind(id, role, key, filename ?? null, Date.now()).run();
+  ).bind(id, role, mate, key, filename ?? null, Date.now()).run();
 
-  return c.json({ url, key, expiresIn: 3600, role, filename: filename ?? null });
+  return c.json({ url, key, expiresIn: 3600, role, mate, filename: filename ?? null });
 });
 
 // ───────────────────────── multipart upload (huge BAM/CRAM) ─────────────────────────
@@ -258,14 +273,16 @@ apiRouter.post("/cases/:id/uploads/:role/multipart", async (c) => {
   const id = sanitize(c.req.param("id"));
   const role = c.req.param("role");
   const filename = c.req.query("filename") ?? undefined;
+  const mate = c.req.query("mate") ?? "";
   if (!id) return c.json({ error: "bad caseId" }, 400);
   if (!ALLOWED_ROLES.has(role)) return c.json({ error: "bad role" }, 400);
+  if (!ALLOWED_MATES.has(mate)) return c.json({ error: "bad mate (allowed: R1, R2)" }, 400);
   const ext = pickExt(filename);
   if (!ext || !ALLOWED_EXTS.has(ext)) {
-    return c.json({ error: "unsupported file extension (allowed: vcf, vcf.gz, bam)" }, 400);
+    return c.json({ error: "unsupported file extension (allowed: vcf, vcf.gz, bam, cram, fastq.gz, fq.gz)" }, 400);
   }
 
-  const key = `cases/${id}/uploads/${role}.${ext}`;
+  const key = uploadKey(id, role, mate, ext);
   let uploadId: string;
   try {
     uploadId = await createMultipart(c.env, key, "application/octet-stream");
@@ -278,7 +295,7 @@ apiRouter.post("/cases/:id/uploads/:role/multipart", async (c) => {
     `INSERT INTO cases (id, name, status) VALUES (?, ?, 'draft') ON CONFLICT(id) DO NOTHING`,
   ).bind(id, `Case ${id}`).run();
 
-  return c.json({ uploadId, key, partSize: MULTIPART_PART_SIZE, role, filename: filename ?? null });
+  return c.json({ uploadId, key, partSize: MULTIPART_PART_SIZE, role, mate, filename: filename ?? null });
 });
 
 /**
@@ -310,8 +327,10 @@ apiRouter.post("/cases/:id/uploads/:role/multipart/:uploadId/complete", async (c
   if (!id) return c.json({ error: "bad caseId" }, 400);
   if (!ALLOWED_ROLES.has(role)) return c.json({ error: "bad role" }, 400);
   const uploadId = c.req.param("uploadId");
-  const body = await c.req.json<{ key: string; filename?: string; parts: { partNumber: number; etag: string }[] }>();
+  const body = await c.req.json<{ key: string; filename?: string; mate?: string; parts: { partNumber: number; etag: string }[] }>();
+  const mate = body?.mate ?? "";
   if (!body?.key || !body.key.startsWith(`cases/${id}/uploads/`)) return c.json({ error: "bad key" }, 400);
+  if (!ALLOWED_MATES.has(mate)) return c.json({ error: "bad mate" }, 400);
   if (!Array.isArray(body.parts) || body.parts.length === 0) return c.json({ error: "no parts" }, 400);
 
   try {
@@ -321,13 +340,13 @@ apiRouter.post("/cases/:id/uploads/:role/multipart/:uploadId/complete", async (c
   }
 
   await c.env.DB.prepare(
-    `INSERT INTO uploads (case_id, role, r2_key, filename, uploaded_at)
-     VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(case_id, role) DO UPDATE SET
+    `INSERT INTO uploads (case_id, role, mate, r2_key, filename, uploaded_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(case_id, role, mate) DO UPDATE SET
        r2_key=excluded.r2_key, filename=excluded.filename, uploaded_at=excluded.uploaded_at`,
-  ).bind(id, role, body.key, body.filename ?? null, Date.now()).run();
+  ).bind(id, role, mate, body.key, body.filename ?? null, Date.now()).run();
 
-  return c.json({ ok: true, key: body.key, role });
+  return c.json({ ok: true, key: body.key, role, mate });
 });
 
 /**
@@ -361,14 +380,18 @@ async function kickEngineRun(
   manifest: CaseManifest,
 ) {
   // Confirm uploads exist before kicking off — keeps the engine from running on
-  // a half-populated case.
+  // a half-populated case. Group by role (a FASTQ role has R1 + R2 mates).
   const uploads = await c.env.DB.prepare(
-    `SELECT role, r2_key FROM uploads WHERE case_id = ?`,
-  ).bind(id).all<{ role: string; r2_key: string }>();
-  const byRole = new Map((uploads.results ?? []).map((r) => [r.role, r.r2_key]));
+    `SELECT role, mate, r2_key FROM uploads WHERE case_id = ?`,
+  ).bind(id).all<{ role: string; mate: string; r2_key: string }>();
+  const byRole = new Map<string, { mate: string; key: string }[]>();
+  for (const r of uploads.results ?? []) {
+    if (!byRole.has(r.role)) byRole.set(r.role, []);
+    byRole.get(r.role)!.push({ mate: r.mate ?? "", key: r.r2_key });
+  }
   for (const role of Object.keys(manifest.files)) {
     if (!byRole.has(role)) {
-      return c.json({ error: `no uploaded VCF found for role=${role}` }, 400);
+      return c.json({ error: `no uploaded file found for role=${role}` }, 400);
     }
   }
   return _continueRun(c, id, manifest, byRole);
@@ -378,33 +401,47 @@ async function _continueRun(
   c: import("hono").Context<{ Bindings: Bindings; Variables: Variables }>,
   id: string,
   manifest: CaseManifest,
-  byRole: Map<string, string>,
+  byRole: Map<string, { mate: string; key: string }[]>,
 ) {
 
-  // Mint signed URLs for the container. Split uploads by extension: aligned
-  // reads (.bam/.cram) route into the engine's GATK calling path (bam_urls +
-  // reference); everything else is a VCF fed straight into annotation.
+  // Mint signed URLs for the container, routing each role by upload kind:
+  //   FASTQ (R1/R2 mates) → fastq_urls → engine aligns (BWA-MEM) then calls
+  //   .bam/.cram          → bam_urls   → engine GATK-calls
+  //   .vcf(.gz)           → vcf_urls   → straight to annotation
   const vcfUrls: Record<string, string> = {};
   const bamUrls: Record<string, string> = {};
-  for (const [role, key] of byRole.entries()) {
-    const lower = key.toLowerCase();
-    const signed = await signR2(c.env, "variantgpt", key, "GET", 24 * 3600);
+  const fastqUrls: Record<string, { r1: string; r2: string | null }> = {};
+  for (const [role, blobs] of byRole.entries()) {
+    const r1 = blobs.find((b) => b.mate === "R1");
+    const r2 = blobs.find((b) => b.mate === "R2");
+    if (r1) {
+      fastqUrls[role] = {
+        r1: await signR2(c.env, "variantgpt", r1.key, "GET", 24 * 3600),
+        r2: r2 ? await signR2(c.env, "variantgpt", r2.key, "GET", 24 * 3600) : null,
+      };
+      continue;
+    }
+    const blob = blobs.find((b) => b.mate === "") ?? blobs[0];
+    const signed = await signR2(c.env, "variantgpt", blob.key, "GET", 24 * 3600);
+    const lower = blob.key.toLowerCase();
     if (lower.endsWith(".bam") || lower.endsWith(".cram")) bamUrls[role] = signed;
     else vcfUrls[role] = signed;
   }
+  const needsReference = Object.keys(bamUrls).length > 0 || Object.keys(fastqUrls).length > 0;
 
-  // Reference + known-sites for GATK calling — only needed when BAMs are present.
-  // Configured as R2 keys on the Worker (REFERENCE_FASTA_KEY etc.); when a BAM
-  // is uploaded but no reference is configured, fail fast with a clear message.
+  // Reference + known-sites for GATK calling / alignment — needed when BAM or
+  // FASTQ inputs are present. Configured as R2 keys on the Worker; when reads
+  // are uploaded but no reference is configured, fail fast with a clear message.
+  // (FASTQ also needs the engine's on-volume BWA index via REFERENCE_FASTA_PATH.)
   let referenceUrl: string | undefined;
   let referenceFaiUrl: string | undefined;
   let referenceDictUrl: string | undefined;
   const knownSitesUrls: string[] = [];
-  if (Object.keys(bamUrls).length > 0) {
+  if (needsReference) {
     if (!c.env.REFERENCE_FASTA_KEY) {
       return c.json({
-        error: "BAM upload requires a reference genome, but REFERENCE_FASTA_KEY is not configured on this Worker",
-        hint: "set REFERENCE_FASTA_KEY (+ optional REFERENCE_FAI_KEY / REFERENCE_DICT_KEY / KNOWN_SITES_KEYS) to the R2 keys of the reference FASTA",
+        error: "BAM/FASTQ upload requires a reference genome, but REFERENCE_FASTA_KEY is not configured on this Worker",
+        hint: "set REFERENCE_FASTA_KEY (+ optional REFERENCE_FAI_KEY / REFERENCE_DICT_KEY / KNOWN_SITES_KEYS) to the R2 keys of the reference FASTA. FASTQ also needs the engine's on-volume BWA index (REFERENCE_FASTA_PATH).",
       }, 400);
     }
     referenceUrl = await signR2(c.env, "variantgpt", c.env.REFERENCE_FASTA_KEY, "GET", 24 * 3600);
@@ -499,6 +536,9 @@ async function _continueRun(
       case_id: id,
       manifest,
       vcf_urls: vcfUrls,
+      // Raw-reads path — present only when FASTQ was uploaded; the engine
+      // aligns (BWA-MEM) then GATK-calls. {role: {r1, r2|null}}.
+      fastq_urls: fastqUrls,
       // Aligned-reads path (GATK best practices) — present only when BAM/CRAM
       // were uploaded; the engine calls them to VCF before annotation.
       bam_urls: bamUrls,

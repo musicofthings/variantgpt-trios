@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 
-export type AcceptedKind = "vcf" | "vcf_gz" | "bam" | "bai" | "unknown";
+export type AcceptedKind = "vcf" | "vcf_gz" | "bam" | "bai" | "fastq" | "unknown";
 
 export interface StagedFile {
   file: File;
@@ -9,7 +9,7 @@ export interface StagedFile {
   error?: string;
 }
 
-const ACCEPT = ".vcf,.vcf.gz,.gz,.bam,.bai";
+const ACCEPT = ".vcf,.vcf.gz,.gz,.bam,.bai,.cram,.fastq,.fq,.fastq.gz,.fq.gz";
 
 /** Drop-zone for Illumina WES/WGS inputs (PRD §4.1 VCF upload).
  *
@@ -104,6 +104,7 @@ function KindBadge({ kind }: { kind: AcceptedKind }) {
     vcf_gz: { label: "VCF.gz", color: "var(--primary)" },
     bam:    { label: "BAM",    color: "var(--tier-lb)" },
     bai:    { label: "BAI",    color: "var(--ink-soft)" },
+    fastq:  { label: "FASTQ",  color: "var(--tier-lb)" },
     unknown: { label: "?",     color: "var(--accent)" },
   };
   const { label, color } = map[kind];
@@ -119,8 +120,11 @@ export function detectKind(name: string): AcceptedKind {
   const lower = name.toLowerCase();
   if (lower.endsWith(".vcf")) return "vcf";
   if (lower.endsWith(".vcf.gz") || lower.endsWith(".vcf.bgz")) return "vcf_gz";
-  if (lower.endsWith(".bam")) return "bam";
-  if (lower.endsWith(".bai") || lower.endsWith(".bam.bai")) return "bai";
+  if (lower.endsWith(".bam") || lower.endsWith(".cram")) return "bam";
+  if (lower.endsWith(".bai") || lower.endsWith(".bam.bai") || lower.endsWith(".crai")) return "bai";
+  // FASTQ (raw reads) — paired R1/R2 handled by the Intake page.
+  if (lower.endsWith(".fastq.gz") || lower.endsWith(".fq.gz") ||
+      lower.endsWith(".fastq") || lower.endsWith(".fq")) return "fastq";
   // Some pipelines emit `*.gz` for a bgzipped VCF.
   if (lower.endsWith(".gz")) return "vcf_gz";
   return "unknown";

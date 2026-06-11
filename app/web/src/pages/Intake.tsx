@@ -60,6 +60,9 @@ export function Intake() {
   const [familyHistory, setFamilyHistory] = useState("");
   const [consanguinityNote, setConsanguinityNote] = useState("");
   const [staged, setStaged] = useState<StagedByRole>({});
+  // Input modality. "vcf" covers VCF + aligned BAM/CRAM (one file per member).
+  // "fastq" is paired raw reads (R1 + R2 per member), aligned engine-side.
+  const [inputType, setInputType] = useState<"vcf" | "fastq">("vcf");
   const [runStage, setRunStage] = useState<RunStage>("idle");
   const [runMsg, setRunMsg] = useState<string>("");
   const [caseId] = useState(() => `case-${Date.now().toString(36)}`);
@@ -185,6 +188,9 @@ export function Intake() {
         ...s,
         [role]: { ...sf, sniffOk: r.ok, sniffError: r.error },
       }));
+    } else if (sf.kind === "fastq") {
+      // FASTQ carries no sample header to sniff; accept as-is.
+      setStaged((s) => ({ ...s, [role]: { ...sf, sniffOk: true } }));
     }
   }
 
@@ -197,12 +203,20 @@ export function Intake() {
   const missingCount = pedigree.members.length - presentMembers.length;
   const proband = pedigree.members.find((m) => m.role === "proband");
 
-  // A member is "ready" when it has a staged VCF *or* BAM with no blocking error.
-  const stagedFileRoles = Object.entries(staged)
-    .filter(([_, sf]) => sf && (sf.kind === "vcf" || sf.kind === "vcf_gz" || sf.kind === "bam") && !sf.error)
-    .map(([role]) => role);
-  const vcfReadyCount = stagedFileRoles.length;
-  const probandStaged = !!(proband && stagedFileRoles.includes(proband.id));
+  // A member is "ready" when its required upload(s) are staged without error:
+  //   vcf mode   → one VCF/BAM file (key = member id)
+  //   fastq mode → paired R1 (key = id) + R2 (key = `${id}__R2`)
+  function memberReady(id: string): boolean {
+    if (inputType === "fastq") {
+      const r1 = staged[id];
+      const r2 = staged[`${id}__R2`];
+      return !!(r1 && r1.kind === "fastq" && !r1.error && r2 && r2.kind === "fastq" && !r2.error);
+    }
+    const sf = staged[id];
+    return !!(sf && (sf.kind === "vcf" || sf.kind === "vcf_gz" || sf.kind === "bam") && !sf.error);
+  }
+  const vcfReadyCount = presentMembers.filter((m) => memberReady(m.id)).length;
+  const probandStaged = !!(proband && memberReady(proband.id));
 
   // Collision check: did the curator reassign two VCFs to the same target role?
   const targetCounts = new Map<string, number>();
@@ -242,33 +256,43 @@ export function Intake() {
     setRunStage("uploading");
     setRunMsg("Uploading…");
     try {
-      // 1. Upload each staged VCF/BAM straight to R2. Small files take a single
-      //    presigned PUT; large ones (BAM/CRAM, multi-GB WGS) stream as a
-      //    resumable S3 multipart upload — bytes never touch the Worker.
-      for (const [role, sf] of Object.entries(staged)) {
-        if (!sf || sf.kind === "bai") continue;
-        if (sf.kind === "unknown" || sf.error) continue;
-        const target = sf.reassignedTo ?? role;
-        const verb = sf.kind === "bam" ? "Calling-ready BAM" : "VCF";
-        await uploadStaged(caseId, target, sf.file, (p) => {
-          setRunMsg(`Uploading ${target} (${verb}) — ${Math.round(p.fraction * 100)}%`);
-        });
-        setRunMsg(`Uploaded ${target}`);
+      // 1. Upload each staged file straight to R2 (single PUT for small files,
+      //    resumable multipart for large ones — bytes never touch the Worker).
+      //    `files` records a representative per-role filename for the manifest;
+      //    the Worker routes by extension/mate (FASTQ→align, BAM→call, VCF→annotate).
+      const files: Record<string, string> = {};
+      if (inputType === "fastq") {
+        for (const m of presentMembers) {
+          const r1 = staged[m.id];
+          const r2 = staged[`${m.id}__R2`];
+          if (!r1 || !r2) continue;
+          await uploadStaged(caseId, m.id, r1.file,
+            (p) => setRunMsg(`Uploading ${m.id} R1 — ${Math.round(p.fraction * 100)}%`), "R1");
+          await uploadStaged(caseId, m.id, r2.file,
+            (p) => setRunMsg(`Uploading ${m.id} R2 — ${Math.round(p.fraction * 100)}%`), "R2");
+          setRunMsg(`Uploaded ${m.id} (R1+R2)`);
+          const ext = r1.file.name.toLowerCase().endsWith(".fq.gz") ? "fq.gz" : "fastq.gz";
+          files[m.id] = `${m.id}.R1.${ext}`;
+        }
+      } else {
+        for (const [role, sf] of Object.entries(staged)) {
+          if (!sf || sf.kind === "bai" || sf.kind === "unknown" || sf.kind === "fastq" || sf.error) continue;
+          const target = sf.reassignedTo ?? role;
+          const verb = sf.kind === "bam" ? "BAM/CRAM" : "VCF";
+          await uploadStaged(caseId, target, sf.file, (p) => {
+            setRunMsg(`Uploading ${target} (${verb}) — ${Math.round(p.fraction * 100)}%`);
+          });
+          setRunMsg(`Uploaded ${target}`);
+          const lower = sf.file.name.toLowerCase();
+          const ext = sf.kind === "bam"
+            ? (lower.endsWith(".cram") ? "cram" : "bam")
+            : (lower.endsWith(".gz") ? "vcf.gz" : "vcf");
+          files[target] = `${target}.${ext}`;
+        }
       }
 
-      // 2. Trigger engine run with manifest. `files` records the per-role
-      //    filename incl. extension; the Worker routes .bam/.cram into the GATK
-      //    calling path and .vcf(.gz) straight into annotation.
+      // 2. Trigger engine run with manifest.
       setRunMsg("Submitting run…");
-      const files: Record<string, string> = {};
-      for (const [role, sf] of Object.entries(staged)) {
-        if (!sf || sf.kind === "bai" || sf.kind === "unknown" || sf.error) continue;
-        const target = sf.reassignedTo ?? role;
-        const ext = sf.kind === "bam"
-          ? "bam"
-          : sf.file.name.toLowerCase().endsWith(".gz") ? "vcf.gz" : "vcf";
-        files[target] = `${target}.${ext}`;
-      }
       const manifest = {
         pedigree: pedigree.members.map((m) => ({
           id: m.id, role: m.role, sex: m.sex, affected: m.affected,
@@ -348,7 +372,7 @@ export function Intake() {
           <a href="#sec-pedigree" style={{ color: "var(--ink-soft)" }}>1. Pedigree</a>
           <a href="#sec-hpo" style={{ color: "var(--ink-soft)" }}>2. Phenotype</a>
           <a href="#sec-history" style={{ color: "var(--ink-soft)" }}>3. Clinical history</a>
-          <a href="#sec-vcf" style={{ color: "var(--ink-soft)" }}>4. VCF / BAM upload</a>
+          <a href="#sec-vcf" style={{ color: "var(--ink-soft)" }}>4. Upload data</a>
         </nav>
 
         <div>
@@ -479,13 +503,36 @@ export function Intake() {
           </section>
 
           <section id="sec-vcf" className="card" style={{ marginBottom: 24 }}>
-            <h3>4. VCF / BAM upload</h3>
+            <h3>4. Upload sequencing data</h3>
             <p style={{ color: "var(--ink-soft)", marginTop: 4 }}>
-              One drop-zone per pedigree member. Accepts <code className="mono">.vcf</code>,{" "}
-              <code className="mono">.vcf.gz</code> (bgzipped OK),{" "}
-              <code className="mono">.bam</code>{" "}<span style={{ opacity: 0.7 }}>(BAM is staged but v1 expects post-calling VCF — PRD §1)</span>.
-              Sample names are read from the VCF header in-browser and matched to roles.
+              {inputType === "fastq"
+                ? <>Paired raw reads per member — <code className="mono">R1</code> + <code className="mono">R2</code>{" "}
+                    (<code className="mono">.fastq.gz</code> / <code className="mono">.fq.gz</code>). The engine aligns
+                    (BWA-MEM) and calls variants. WES alignment runs ~30–60 min per sample.</>
+                : <>One drop-zone per member. Accepts <code className="mono">.vcf</code>,{" "}
+                    <code className="mono">.vcf.gz</code>, or aligned <code className="mono">.bam</code>/<code className="mono">.cram</code>.
+                    VCF sample names are read in-browser and matched to roles.</>}
             </p>
+
+            {/* Input modality toggle */}
+            <div role="radiogroup" aria-label="Input data type" style={{ display: "inline-flex", border: "1px solid var(--line)", borderRadius: 8, overflow: "hidden", marginTop: 8 }}>
+              {([["vcf", "VCF / BAM"], ["fastq", "FASTQ (R1+R2)"]] as const).map(([v, label]) => (
+                <button
+                  key={v}
+                  type="button"
+                  role="radio"
+                  aria-checked={inputType === v}
+                  onClick={() => { setInputType(v); setStaged({}); }}
+                  style={{
+                    border: "none", borderRight: "1px solid var(--line)", padding: "6px 14px",
+                    fontSize: 13, cursor: "pointer",
+                    background: inputType === v ? "var(--primary-soft)" : "var(--paper)",
+                    color: inputType === v ? "var(--primary)" : "var(--ink)",
+                    fontWeight: inputType === v ? 600 : 400,
+                  }}
+                >{label}</button>
+              ))}
+            </div>
 
             {buildConflict ? (
               <div className="banner banner-warn">
@@ -514,6 +561,31 @@ export function Intake() {
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 12, marginTop: 16 }}>
               {pedigree.members.filter((m) => !m.missing).map((m) => {
+                if (inputType === "fastq") {
+                  const r1 = staged[m.id];
+                  const r2 = staged[`${m.id}__R2`];
+                  return (
+                    <div key={m.id} style={{ display: "grid", gap: 6 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600 }}>{capitalize(m.role)} · <span className="mono">{m.id}</span></div>
+                      <FileDropzone
+                        label="R1 · forward reads"
+                        hint="Drop R1 .fastq.gz"
+                        staged={r1 ?? null}
+                        onStage={(s) => handleStage(m.id, s)}
+                        onClear={() => clearStage(m.id)}
+                      />
+                      <FileDropzone
+                        label="R2 · reverse reads"
+                        hint="Drop R2 .fastq.gz"
+                        staged={r2 ?? null}
+                        onStage={(s) => handleStage(`${m.id}__R2`, s)}
+                        onClear={() => clearStage(`${m.id}__R2`)}
+                      />
+                      {r1 && r1.kind !== "fastq" ? <div className="sample-map warn">R1 must be a FASTQ file</div> : null}
+                      {r2 && r2.kind !== "fastq" ? <div className="sample-map warn">R2 must be a FASTQ file</div> : null}
+                    </div>
+                  );
+                }
                 const sf = staged[m.id];
                 const effectiveRole = sf?.reassignedTo ?? m.id;
                 const effectiveMember = pedigree.members.find((x) => x.id === effectiveRole) ?? m;
@@ -602,8 +674,8 @@ export function Intake() {
           Pedigree {pedigree.members.length >= 1 ? "✓" : "·"}
           {" · "}HPO {hpo.length >= 1 ? "✓" : "·"}
           {" · "}History {history.trim().length >= 20 ? "✓" : "·"}
-          {" · "}Proband VCF {probandStaged ? "✓" : "·"}
-          {" · "}VCFs <span className="mono">{vcfReadyCount}/{presentMembers.length}</span>
+          {" · "}Proband {inputType === "fastq" ? "FASTQ" : "data"} {probandStaged ? "✓" : "·"}
+          {" · "}{inputType === "fastq" ? "Pairs" : "Files"} <span className="mono">{vcfReadyCount}/{presentMembers.length}</span>
           {missingCount ? <span style={{ color: "var(--accent)", marginLeft: 4 }}>({missingCount} no sample)</span> : null}
           {unresolvedMismatches.length ? <span style={{ color: "var(--accent)", marginLeft: 8 }}>· {unresolvedMismatches.length} unresolved mismatch</span> : null}
           {runMsg ? <span style={{ marginLeft: 16, color: runStage === "error" ? "var(--accent)" : "var(--primary)" }}>{runMsg}</span> : null}

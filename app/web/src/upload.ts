@@ -23,24 +23,25 @@ export interface UploadProgress {
 
 export type ProgressFn = (p: UploadProgress) => void;
 
-/** Upload one staged file to R2 under cases/<caseId>/uploads/<role>.<ext>.
- *  Returns the R2 key. Picks single-PUT or multipart automatically. */
+/** Upload one staged file to R2 under cases/<caseId>/uploads/<role>[.<mate>].<ext>.
+ *  `mate` is "R1"/"R2" for paired FASTQ, "" for VCF/BAM. Returns the R2 key.
+ *  Picks single-PUT or multipart automatically by size. */
 export async function uploadStaged(
   caseId: string,
   role: string,
   file: File,
   onProgress?: ProgressFn,
+  mate: "" | "R1" | "R2" = "",
 ): Promise<string> {
   if (file.size <= MULTIPART_THRESHOLD) {
-    return singlePut(caseId, role, file, onProgress);
+    return singlePut(caseId, role, file, mate, onProgress);
   }
-  return multipartUpload(caseId, role, file, onProgress);
+  return multipartUpload(caseId, role, file, mate, onProgress);
 }
 
-async function singlePut(caseId: string, role: string, file: File, onProgress?: ProgressFn): Promise<string> {
-  const r = await apiFetch(
-    api(`/cases/${caseId}/upload-url/${role}?filename=${encodeURIComponent(file.name)}`),
-  );
+async function singlePut(caseId: string, role: string, file: File, mate: string, onProgress?: ProgressFn): Promise<string> {
+  const q = `filename=${encodeURIComponent(file.name)}${mate ? `&mate=${mate}` : ""}`;
+  const r = await apiFetch(api(`/cases/${caseId}/upload-url/${role}?${q}`));
   if (!r.ok) throw new Error(`signing ${role} failed: ${r.status}`);
   const { url, key } = (await r.json()) as { url: string; key: string };
   const put = await fetch(url, {
@@ -53,10 +54,11 @@ async function singlePut(caseId: string, role: string, file: File, onProgress?: 
   return key;
 }
 
-async function multipartUpload(caseId: string, role: string, file: File, onProgress?: ProgressFn): Promise<string> {
+async function multipartUpload(caseId: string, role: string, file: File, mate: string, onProgress?: ProgressFn): Promise<string> {
   // 1. init
+  const q = `filename=${encodeURIComponent(file.name)}${mate ? `&mate=${mate}` : ""}`;
   const initRes = await apiFetch(
-    api(`/cases/${caseId}/uploads/${role}/multipart?filename=${encodeURIComponent(file.name)}`),
+    api(`/cases/${caseId}/uploads/${role}/multipart?${q}`),
     { method: "POST" },
   );
   if (!initRes.ok) throw new Error(`multipart init ${role} failed: ${initRes.status}`);
@@ -98,7 +100,7 @@ async function multipartUpload(caseId: string, role: string, file: File, onProgr
       {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ key, filename: file.name, parts }),
+        body: JSON.stringify({ key, filename: file.name, mate, parts }),
       },
     );
     if (!done.ok) throw new Error(`multipart complete ${role} failed: ${done.status}`);
