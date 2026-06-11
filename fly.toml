@@ -21,22 +21,20 @@ primary_region = "iad"          # change to closer region (e.g. "bom" for Mumbai
 # (see infra/DEPLOY_BAM_SV.md). Until populated, the per-case CNV/AnnotSV step
 # degrades gracefully (SNV calling is unaffected). Create the volume first:
 #   fly volumes create annotsv_data --size 10 --region <region>
+# Fly machines support only ONE volume, so the AnnotSV annotation DB and the
+# reference genome (+ BWA index) share this volume. AnnotSV lives at the mount
+# root; the reference goes in a refs/ subdir. Built once by
+# tracks/build_reference_volume.sh (GRCh38 FASTA/.fai/.dict + `bwa index`).
+# REFERENCE_FASTA_PATH points the engine at it so it doesn't re-download a
+# multi-GB reference per case (and FASTQ alignment needs the on-disk BWA index).
 [[mounts]]
   source = "annotsv_data"
   destination = "/opt/AnnotSV/share"
 
-# Reference genome + BWA index for FASTQ->BAM alignment and GATK calling. Built
-# once onto the volume by tracks/build_reference_volume.sh (downloads the GRCh38
-# FASTA/.fai/.dict + `bwa index`). REFERENCE_FASTA_PATH points the engine at it
-# so it doesn't re-download a multi-GB reference per case.
-[[mounts]]
-  source = "refs_data"
-  destination = "/refs"
-
 [env]
   PORT = "8080"
   VGPT_DEBUG = "0"
-  REFERENCE_FASTA_PATH = "/refs/Homo_sapiens_assembly38.fasta"
+  REFERENCE_FASTA_PATH = "/opt/AnnotSV/share/refs/Homo_sapiens_assembly38.fasta"
 
 [http_service]
   internal_port = 8080

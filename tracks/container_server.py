@@ -63,7 +63,7 @@ from variantgpt_engine.filter import filter_candidates, proband_carrier_filter  
 from variantgpt_engine.inheritance import assign_models, compound_het_pass  # noqa: E402
 from variantgpt_engine.joint import merge  # noqa: E402
 from variantgpt_engine.models import Build, CaseEmission, ClinicalHistory, GeneInfo, HPOTerm, StructuralVariant, Variant  # noqa: E402
-from variantgpt_engine.bam_calling import call_all as call_bams  # noqa: E402
+from variantgpt_engine.bam_calling import call_all as call_bams, call_all_from_fastq as call_fastqs  # noqa: E402
 from variantgpt_engine.sv_pipeline import run_sv_from_annotsv  # noqa: E402
 from variantgpt_engine import sv_calling  # noqa: E402
 from variantgpt_engine.phenotype import PhenotypeScorer, gene_phenotype_terms  # noqa: E402
@@ -188,11 +188,18 @@ async def _execute_job(job: dict[str, Any]) -> None:
             #    download/preprocess/merge flow below treats them identically to
             #    uploaded VCFs. Requires reference_url (+ .fai/.dict).
             bam_urls: dict[str, str] = job.get("bam_urls") or {}
-            if bam_urls:
-                emit(f"BAM calling: {len(bam_urls)} sample(s) via GATK best practices")
+            # FASTQ inputs: {role: {"r1": url, "r2": url|None}} — aligned with
+            # BWA-MEM first, then the same GATK calling flow.
+            fastq_urls: dict[str, dict] = job.get("fastq_urls") or {}
+            if bam_urls or fastq_urls:
+                n = len(fastq_urls or bam_urls)
+                emit(("FASTQ alignment + GATK calling" if fastq_urls else "BAM calling")
+                     + f": {n} sample(s)")
                 refdir = workdir / "ref"
                 refdir.mkdir(parents=True, exist_ok=True)
                 ks_paths: list[Path] = []
+                fastq_paths: dict[str, tuple] = {}
+                bam_paths: dict[str, Path] = {}
                 async with httpx.AsyncClient(timeout=600.0, follow_redirects=True) as client:
                     async def _dl(url: str, dst: Path) -> None:
                         async with client.stream("GET", url) as r:
@@ -201,23 +208,31 @@ async def _execute_job(job: dict[str, Any]) -> None:
                                 async for chunk in r.aiter_bytes():
                                     fh.write(chunk)
 
-                    # Prefer a baked-in / volume-mounted reference (REFERENCE_FASTA_PATH)
-                    # to avoid re-downloading a multi-GB FASTA per case. Its .fai/.dict
-                    # are expected alongside it. Known sites can likewise come from
-                    # KNOWN_SITES_PATHS (colon-separated). Otherwise fall back to the
-                    # signed R2 URLs the Worker passed.
+                    # Prefer a volume-mounted reference (REFERENCE_FASTA_PATH) to
+                    # avoid re-downloading a multi-GB FASTA per case. Its .fai/.dict
+                    # (and, for FASTQ, the BWA index) are expected alongside it.
+                    # Known sites can come from KNOWN_SITES_PATHS (colon-separated).
+                    # Otherwise fall back to the signed R2 URLs the Worker passed.
                     ref_env = os.environ.get("REFERENCE_FASTA_PATH")
-                    if ref_env and Path(ref_env).exists():
+                    local_ref = bool(ref_env and Path(ref_env).exists())
+                    if local_ref:
                         ref_path = Path(ref_env)
                         emit(f"using local reference {ref_path}")
                         for p in os.environ.get("KNOWN_SITES_PATHS", "").split(":"):
                             if p and Path(p).exists():
                                 ks_paths.append(Path(p))
                     else:
+                        # FASTQ alignment needs a BWA index next to the FASTA, which
+                        # a per-case download can't provide — require the volume.
+                        if fastq_urls:
+                            raise RuntimeError(
+                                "fastq_urls require REFERENCE_FASTA_PATH (a reference volume "
+                                "with a BWA index); the per-case reference download has no index"
+                            )
                         reference_url = job.get("reference_url")
                         if not reference_url:
                             raise RuntimeError(
-                                "bam_urls supplied but no reference — set REFERENCE_FASTA_PATH "
+                                "reads supplied but no reference — set REFERENCE_FASTA_PATH "
                                 "on the engine or configure REFERENCE_FASTA_KEY on the Worker"
                             )
                         ref_path = refdir / "reference.fasta"
@@ -230,18 +245,38 @@ async def _execute_job(job: dict[str, Any]) -> None:
                             ks_dst = refdir / f"known_sites_{i}.vcf.gz"
                             await _dl(ks_url, ks_dst)
                             ks_paths.append(ks_dst)
-                    bam_paths: dict[str, Path] = {}
-                    for role, url in bam_urls.items():
-                        ext = ".cram" if str(url).lower().split("?")[0].endswith(".cram") else ".bam"
-                        dst = workdir / f"{role}{ext}"
-                        emit(f"download BAM role={role} -> {dst.name}")
-                        await _dl(url, dst)
-                        bam_paths[role] = dst
-                emit("GATK: MarkDuplicates → (BQSR) → HaplotypeCaller → GenotypeGVCFs")
-                called = await asyncio.to_thread(
-                    call_bams, bam_paths, ref_path, workdir / "gatk",
-                    known_sites=ks_paths or None, intervals=None,
-                )
+
+                    if fastq_urls:
+                        for role, urls in fastq_urls.items():
+                            r1 = workdir / f"{role}_R1.fastq.gz"
+                            emit(f"download FASTQ role={role} R1")
+                            await _dl(urls["r1"], r1)
+                            r2 = None
+                            if urls.get("r2"):
+                                r2 = workdir / f"{role}_R2.fastq.gz"
+                                emit(f"download FASTQ role={role} R2")
+                                await _dl(urls["r2"], r2)
+                            fastq_paths[role] = (r1, r2)
+                    else:
+                        for role, url in bam_urls.items():
+                            ext = ".cram" if str(url).lower().split("?")[0].endswith(".cram") else ".bam"
+                            dst = workdir / f"{role}{ext}"
+                            emit(f"download BAM role={role} -> {dst.name}")
+                            await _dl(url, dst)
+                            bam_paths[role] = dst
+
+                if fastq_urls:
+                    emit("BWA-MEM align → MarkDuplicates → (BQSR) → HaplotypeCaller → GenotypeGVCFs")
+                    called = await asyncio.to_thread(
+                        call_fastqs, fastq_paths, ref_path, workdir / "gatk",
+                        known_sites=ks_paths or None, intervals=None,
+                    )
+                else:
+                    emit("GATK: MarkDuplicates → (BQSR) → HaplotypeCaller → GenotypeGVCFs")
+                    called = await asyncio.to_thread(
+                        call_bams, bam_paths, ref_path, workdir / "gatk",
+                        known_sites=ks_paths or None, intervals=None,
+                    )
                 manifest.setdefault("files", {})
                 for role, called_vcf in called.items():
                     fname = f"{role}.vcf.gz"
@@ -251,7 +286,7 @@ async def _execute_job(job: dict[str, Any]) -> None:
                     manifest["files"][role] = fname
                     # Mark as already-local so the R2 download loop skips it.
                     vcf_urls.pop(role, None)
-                emit(f"GATK calling done: {len(called)} VCF(s) produced")
+                emit(f"calling done: {len(called)} VCF(s) produced")
 
                 # gCNV → AnnotSV: when a prebuilt cohort-model bundle is provided,
                 # call germline CNVs from the proband BAM (GATK gCNV CASE mode) and

@@ -12,7 +12,9 @@
 # (then poll /tmp/refbuild.log)
 set -e
 
-REF_DIR="${REF_DIR:-/refs}"
+# Default: a refs/ subdir on the AnnotSV volume (Fly allows only one volume, so
+# reference + AnnotSV DB co-locate). Override with REF_DIR if mounted elsewhere.
+REF_DIR="${REF_DIR:-/opt/AnnotSV/share/refs}"
 BASE="https://storage.googleapis.com/gcp-public-data--broad-references/hg38/v0"
 FASTA="Homo_sapiens_assembly38.fasta"
 
