@@ -4,15 +4,17 @@ import { api, apiFetch } from "./apiBase";
 export interface LibraryFile {
   key: string;
   name: string;
+  kind: "fastq" | "vcf";
   mate: "R1" | "R2" | "";
   size: number;
 }
 
 export interface LibrarySample {
-  sample: string;
-  paired: boolean;
+  sample: string;       // = patient folder name (PHI — shown only in the authed app)
+  paired: boolean;      // has FASTQ R1 + R2
   r1: string | null;
   r2: string | null;
+  vcf: string | null;   // partner-called VCF (fast path), when present
   files: LibraryFile[];
 }
 

@@ -67,11 +67,11 @@ export function DataLibrary() {
           <table className="table" style={{ fontSize: 13 }}>
             <thead>
               <tr>
-                <th style={{ textAlign: "left" }}>Sample</th>
-                <th style={{ width: 90 }}>Reads</th>
-                <th style={{ width: 90 }}>Files</th>
+                <th style={{ textAlign: "left" }}>Sample (patient)</th>
+                <th style={{ width: 130 }}>Available</th>
+                <th style={{ width: 70 }}>Files</th>
                 <th style={{ width: 110 }}>Total size</th>
-                <th style={{ textAlign: "left" }}>Files</th>
+                <th style={{ textAlign: "left" }}>Filenames</th>
               </tr>
             </thead>
             <tbody>
@@ -81,11 +81,15 @@ export function DataLibrary() {
                   <tr key={s.sample}>
                     <td className="mono"><strong>{s.sample}</strong></td>
                     <td style={{ textAlign: "center" }}>
-                      {s.paired
-                        ? <span style={{ color: "var(--success, #2c8462)" }}>R1 + R2</span>
-                        : s.r1
-                        ? <span style={{ color: "var(--ink-soft)" }}>R1 only</span>
-                        : <span style={{ color: "var(--rust, #b04a2a)" }}>unpaired</span>}
+                      <span style={{ display: "inline-flex", gap: 4, justifyContent: "center" }}>
+                        {s.vcf ? <span className="pill" style={{ fontSize: 10, color: "var(--primary)" }}>VCF</span> : null}
+                        {s.paired
+                          ? <span className="pill" style={{ fontSize: 10, color: "var(--success, #2c8462)" }}>FASTQ R1+R2</span>
+                          : s.r1
+                          ? <span className="pill" style={{ fontSize: 10, color: "var(--ink-soft)" }}>R1 only</span>
+                          : null}
+                        {!s.vcf && !s.r1 ? <span style={{ color: "var(--rust, #b04a2a)", fontSize: 11 }}>none</span> : null}
+                      </span>
                     </td>
                     <td style={{ textAlign: "center" }}>{s.files.length}</td>
                     <td className="mono">{humanBytes(total)}</td>

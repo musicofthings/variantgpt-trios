@@ -70,6 +70,7 @@ export function Intake() {
   const [librarySamples, setLibrarySamples] = useState<LibrarySample[]>([]);
   const [libraryError, setLibraryError] = useState<string | null>(null);
   const [picked, setPicked] = useState<Record<string, string>>({}); // memberId -> sample name
+  const [pickedType, setPickedType] = useState<Record<string, "vcf" | "fastq">>({}); // memberId -> chosen data type
   const [runStage, setRunStage] = useState<RunStage>("idle");
   const [runMsg, setRunMsg] = useState<string>("");
   const [caseId] = useState(() => `case-${Date.now().toString(36)}`);
@@ -226,7 +227,9 @@ export function Intake() {
   function memberReady(id: string): boolean {
     if (inputType === "library") {
       const s = librarySamples.find((x) => x.sample === picked[id]);
-      return !!(s && s.r1);
+      if (!s) return false;
+      const t = pickedType[id] ?? (s.vcf ? "vcf" : "fastq");
+      return t === "vcf" ? !!s.vcf : !!s.r1;
     }
     if (inputType === "fastq") {
       const r1 = staged[id];
@@ -288,10 +291,16 @@ export function Intake() {
         const assignments: { role: string; mate: "R1" | "R2" | ""; key: string }[] = [];
         for (const m of presentMembers) {
           const s = librarySamples.find((x) => x.sample === picked[m.id]);
-          if (!s || !s.r1) continue;
-          assignments.push({ role: m.id, mate: "R1", key: s.r1 });
-          if (s.r2) assignments.push({ role: m.id, mate: "R2", key: s.r2 });
-          files[m.id] = `${m.id}.R1.fastq.gz`;
+          if (!s) continue;
+          const t = pickedType[m.id] ?? (s.vcf ? "vcf" : "fastq");
+          if (t === "vcf" && s.vcf) {
+            assignments.push({ role: m.id, mate: "", key: s.vcf });
+            files[m.id] = s.vcf.toLowerCase().endsWith(".gz") ? `${m.id}.vcf.gz` : `${m.id}.vcf`;
+          } else if (s.r1) {
+            assignments.push({ role: m.id, mate: "R1", key: s.r1 });
+            if (s.r2) assignments.push({ role: m.id, mate: "R2", key: s.r2 });
+            files[m.id] = `${m.id}.R1.fastq.gz`;
+          }
         }
         await assignDataToCase(caseId, assignments);
       } else if (inputType === "fastq") {
@@ -564,7 +573,7 @@ export function Intake() {
                   type="button"
                   role="radio"
                   aria-checked={inputType === v}
-                  onClick={() => { setInputType(v); setStaged({}); setPicked({}); }}
+                  onClick={() => { setInputType(v); setStaged({}); setPicked({}); setPickedType({}); }}
                   style={{
                     border: "none", borderRight: "1px solid var(--line)", padding: "6px 14px",
                     fontSize: 13, cursor: "pointer",
@@ -622,14 +631,38 @@ export function Intake() {
                           </option>
                         ))}
                       </select>
-                      {sel ? (
-                        <div className="sample-map ok" style={{ flexDirection: "column", alignItems: "stretch", gap: 2 }}>
-                          <span>{sel.paired ? "Paired R1 + R2" : "R1 only"} · {humanBytes(total)}</span>
-                          <span className="mono" style={{ fontSize: 11, color: "var(--ink-soft)" }}>
-                            {sel.files.map((f) => f.name).join("  ·  ")}
-                          </span>
-                        </div>
-                      ) : null}
+                      {sel ? (() => {
+                        const t = pickedType[m.id] ?? (sel.vcf ? "vcf" : "fastq");
+                        return (
+                          <div className="sample-map ok" style={{ flexDirection: "column", alignItems: "stretch", gap: 6 }}>
+                            {sel.vcf && sel.r1 ? (
+                              <div role="radiogroup" aria-label="Data type" style={{ display: "inline-flex", border: "1px solid var(--line)", borderRadius: 6, overflow: "hidden", alignSelf: "flex-start" }}>
+                                {([["vcf", "VCF · fast"], ["fastq", "FASTQ · re-call"]] as const).map(([v, label]) => (
+                                  <button
+                                    key={v}
+                                    type="button"
+                                    onClick={() => setPickedType((p) => ({ ...p, [m.id]: v }))}
+                                    style={{
+                                      border: "none", borderRight: "1px solid var(--line)", padding: "3px 10px",
+                                      fontSize: 11, cursor: "pointer",
+                                      background: t === v ? "var(--primary-soft)" : "var(--paper)",
+                                      color: t === v ? "var(--primary)" : "var(--ink)", fontWeight: t === v ? 600 : 400,
+                                    }}
+                                  >{label}</button>
+                                ))}
+                              </div>
+                            ) : (
+                              <span style={{ fontSize: 11 }}>{sel.vcf ? "VCF only" : sel.paired ? "FASTQ R1 + R2" : "R1 only"}</span>
+                            )}
+                            <span style={{ fontSize: 11 }}>
+                              {t === "vcf" ? "Partner-called VCF (annotation + ACMG)" : "Re-call from reads (BWA-MEM + GATK, ~30–60 min)"} · {humanBytes(total)}
+                            </span>
+                            <span className="mono" style={{ fontSize: 11, color: "var(--ink-soft)" }}>
+                              {sel.files.map((f) => f.name).join("  ·  ")}
+                            </span>
+                          </div>
+                        );
+                      })() : null}
                     </div>
                   );
                 }

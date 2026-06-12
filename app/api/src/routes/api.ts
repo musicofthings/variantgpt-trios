@@ -384,6 +384,10 @@ function isFastqName(name: string): boolean {
   return /\.(fastq|fq)(\.gz)?$/i.test(name);
 }
 
+function isVcfName(name: string): boolean {
+  return /\.vcf(\.gz)?$/i.test(name);
+}
+
 /**
  * GET /api/data/samples?q=<substr>
  * → { samples: [{ sample, paired, r1, r2, files:[{key,name,mate,size}] }] }
@@ -404,31 +408,39 @@ apiRouter.get("/data/samples", async (c) => {
   } while (cursor);
 
   // 2. Files per folder (cap the number of folders we expand per request).
+  //    A sample folder may hold a VCF (partner's calls — fast path) AND paired
+  //    FASTQ R1/R2 (re-call from reads — full pipeline). Surface both.
+  type LibFile = { key: string; name: string; kind: "fastq" | "vcf"; mate: string; size: number };
   const samples: Array<{
-    sample: string; paired: boolean; r1: string | null; r2: string | null;
-    files: { key: string; name: string; mate: string; size: number }[];
+    sample: string; paired: boolean;
+    r1: string | null; r2: string | null; vcf: string | null;
+    files: LibFile[];
   }> = [];
   for (const folder of folders) {
     const sample = folder.slice(DATA_PREFIX.length).replace(/\/$/, "");
     if (q && !sample.toLowerCase().includes(q)) continue;
     if (samples.length >= 500) break; // safety cap
 
-    const files: { key: string; name: string; mate: string; size: number }[] = [];
+    const files: LibFile[] = [];
     let ic: string | undefined;
     do {
       const inner = await c.env.BUCKET.list({ prefix: folder, cursor: ic, limit: 1000 });
       for (const o of inner.objects) {
         const name = o.key.split("/").pop() ?? "";
-        if (!isFastqName(name)) continue;
-        files.push({ key: o.key, name, mate: detectFastqMate(name), size: o.size });
+        if (isFastqName(name)) files.push({ key: o.key, name, kind: "fastq", mate: detectFastqMate(name), size: o.size });
+        else if (isVcfName(name)) files.push({ key: o.key, name, kind: "vcf", mate: "", size: o.size });
       }
       ic = inner.truncated ? inner.cursor : undefined;
     } while (ic);
     if (files.length === 0) continue;
 
-    const r1 = files.find((f) => f.mate === "R1");
-    const r2 = files.find((f) => f.mate === "R2");
-    samples.push({ sample, paired: !!(r1 && r2), r1: r1?.key ?? null, r2: r2?.key ?? null, files });
+    const r1 = files.find((f) => f.kind === "fastq" && f.mate === "R1");
+    const r2 = files.find((f) => f.kind === "fastq" && f.mate === "R2");
+    const vcf = files.find((f) => f.kind === "vcf");
+    samples.push({
+      sample, paired: !!(r1 && r2),
+      r1: r1?.key ?? null, r2: r2?.key ?? null, vcf: vcf?.key ?? null, files,
+    });
   }
 
   samples.sort((a, b) => a.sample.localeCompare(b.sample));
