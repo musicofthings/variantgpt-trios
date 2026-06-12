@@ -2,6 +2,7 @@ import { Navigate, NavLink, Route, Routes } from "react-router-dom";
 import { Home } from "./pages/Home";
 import { Dashboard } from "./pages/Dashboard";
 import { NewCase } from "./pages/NewCase";
+import { DataLibrary } from "./pages/DataLibrary";
 import { Intake } from "./pages/Intake";
 import { Workbench } from "./pages/Workbench";
 import { AnalysisWorkbench } from "./pages/AnalysisWorkbench";
@@ -19,6 +20,7 @@ export function App() {
             <NavLink to="/" end>Home</NavLink>
             <NavLink to="/cases">Cases</NavLink>
             <NavLink to="/cases/new">New Case</NavLink>
+            <NavLink to="/data">Data</NavLink>
             <NavLink to="/tracks">Tracks &amp; Settings</NavLink>
           </nav>
           <div style={{ marginTop: "auto", paddingTop: 16 }}>
@@ -31,6 +33,7 @@ export function App() {
             <Route path="/cases" element={<Dashboard />} />
             <Route path="/cases/new" element={<NewCase />} />
             <Route path="/cases/new/intake" element={<Intake />} />
+            <Route path="/data" element={<DataLibrary />} />
             <Route path="/cases/:caseId" element={<Workbench />} />
             <Route path="/cases/:caseId/analysis" element={<AnalysisWorkbench />} />
             <Route path="/cases/:caseId/report" element={<Report />} />

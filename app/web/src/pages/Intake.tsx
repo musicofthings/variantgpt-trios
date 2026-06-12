@@ -8,6 +8,7 @@ import { pedigreeForMode, type PedigreeState } from "../types-pedigree";
 import { autoMapSample, sniffFile } from "../vcfSniff";
 import { api, apiFetch } from "../apiBase";
 import { uploadStaged } from "../upload";
+import { fetchLibrarySamples, assignDataToCase, humanBytes, type LibrarySample } from "../data";
 
 /** Mode → human label for the topbar pill. Drives only display; the engine
  *  reasons about whichever members the pedigree contains. */
@@ -60,9 +61,15 @@ export function Intake() {
   const [familyHistory, setFamilyHistory] = useState("");
   const [consanguinityNote, setConsanguinityNote] = useState("");
   const [staged, setStaged] = useState<StagedByRole>({});
-  // Input modality. "vcf" covers VCF + aligned BAM/CRAM (one file per member).
-  // "fastq" is paired raw reads (R1 + R2 per member), aligned engine-side.
-  const [inputType, setInputType] = useState<"vcf" | "fastq">("vcf");
+  // Input modality:
+  //   "vcf"     — VCF + aligned BAM/CRAM (one file per member)
+  //   "fastq"   — paired raw reads uploaded from this browser (R1 + R2 per member)
+  //   "library" — pick an already-synced sample from the data library (no upload)
+  const [inputType, setInputType] = useState<"vcf" | "fastq" | "library">("vcf");
+  // Data-library samples (fetched when inputType === "library"); per-member pick.
+  const [librarySamples, setLibrarySamples] = useState<LibrarySample[]>([]);
+  const [libraryError, setLibraryError] = useState<string | null>(null);
+  const [picked, setPicked] = useState<Record<string, string>>({}); // memberId -> sample name
   const [runStage, setRunStage] = useState<RunStage>("idle");
   const [runMsg, setRunMsg] = useState<string>("");
   const [caseId] = useState(() => `case-${Date.now().toString(36)}`);
@@ -77,6 +84,16 @@ export function Intake() {
       return () => clearTimeout(t);
     }
   }, [jobStatus?.status, caseId, navigate]);
+
+  // Load data-library samples when the user switches to library mode.
+  useEffect(() => {
+    if (inputType !== "library") return;
+    let cancelled = false;
+    fetchLibrarySamples()
+      .then((s) => { if (!cancelled) { setLibrarySamples(s); setLibraryError(null); } })
+      .catch((e) => { if (!cancelled) setLibraryError(e instanceof Error ? e.message : String(e)); });
+    return () => { cancelled = true; };
+  }, [inputType]);
 
   // LLM-extracted candidates from /api/ai/hpo-extract (button-triggered to keep
   // cost predictable). Each carries the source phrase for curator transparency.
@@ -207,6 +224,10 @@ export function Intake() {
   //   vcf mode   → one VCF/BAM file (key = member id)
   //   fastq mode → paired R1 (key = id) + R2 (key = `${id}__R2`)
   function memberReady(id: string): boolean {
+    if (inputType === "library") {
+      const s = librarySamples.find((x) => x.sample === picked[id]);
+      return !!(s && s.r1);
+    }
     if (inputType === "fastq") {
       const r1 = staged[id];
       const r2 = staged[`${id}__R2`];
@@ -261,7 +282,19 @@ export function Intake() {
       //    `files` records a representative per-role filename for the manifest;
       //    the Worker routes by extension/mate (FASTQ→align, BAM→call, VCF→annotate).
       const files: Record<string, string> = {};
-      if (inputType === "fastq") {
+      if (inputType === "library") {
+        // No upload — point the case's roles at already-synced library objects.
+        setRunMsg("Assigning library samples…");
+        const assignments: { role: string; mate: "R1" | "R2" | ""; key: string }[] = [];
+        for (const m of presentMembers) {
+          const s = librarySamples.find((x) => x.sample === picked[m.id]);
+          if (!s || !s.r1) continue;
+          assignments.push({ role: m.id, mate: "R1", key: s.r1 });
+          if (s.r2) assignments.push({ role: m.id, mate: "R2", key: s.r2 });
+          files[m.id] = `${m.id}.R1.fastq.gz`;
+        }
+        await assignDataToCase(caseId, assignments);
+      } else if (inputType === "fastq") {
         for (const m of presentMembers) {
           const r1 = staged[m.id];
           const r2 = staged[`${m.id}__R2`];
@@ -505,7 +538,11 @@ export function Intake() {
           <section id="sec-vcf" className="card" style={{ marginBottom: 24 }}>
             <h3>4. Upload sequencing data</h3>
             <p style={{ color: "var(--ink-soft)", marginTop: 4 }}>
-              {inputType === "fastq"
+              {inputType === "library"
+                ? <>Assign a sample from the <strong>data library</strong> (synced daily from the partner lab)
+                    to each member — no upload. The engine reads the FASTQs straight from storage and
+                    aligns (BWA-MEM) + calls. Manage the library under the <strong>Data</strong> tab.</>
+                : inputType === "fastq"
                 ? <>Paired raw reads per member — <code className="mono">R1</code> + <code className="mono">R2</code>{" "}
                     (<code className="mono">.fastq.gz</code> / <code className="mono">.fq.gz</code>). The engine aligns
                     (BWA-MEM) and calls variants. WES alignment runs ~30–60 min per sample.</>
@@ -513,16 +550,21 @@ export function Intake() {
                     <code className="mono">.vcf.gz</code>, or aligned <code className="mono">.bam</code>/<code className="mono">.cram</code>.
                     VCF sample names are read in-browser and matched to roles.</>}
             </p>
+            {inputType === "library" && libraryError ? (
+              <div className="banner banner-warn">Couldn't load the data library: {libraryError}</div>
+            ) : inputType === "library" && librarySamples.length === 0 ? (
+              <div className="banner banner-info">No library samples yet — they appear here after the daily SFTP sync runs.</div>
+            ) : null}
 
             {/* Input modality toggle */}
             <div role="radiogroup" aria-label="Input data type" style={{ display: "inline-flex", border: "1px solid var(--line)", borderRadius: 8, overflow: "hidden", marginTop: 8 }}>
-              {([["vcf", "VCF / BAM"], ["fastq", "FASTQ (R1+R2)"]] as const).map(([v, label]) => (
+              {([["vcf", "VCF / BAM"], ["fastq", "FASTQ (R1+R2)"], ["library", "Data library"]] as const).map(([v, label]) => (
                 <button
                   key={v}
                   type="button"
                   role="radio"
                   aria-checked={inputType === v}
-                  onClick={() => { setInputType(v); setStaged({}); }}
+                  onClick={() => { setInputType(v); setStaged({}); setPicked({}); }}
                   style={{
                     border: "none", borderRight: "1px solid var(--line)", padding: "6px 14px",
                     fontSize: 13, cursor: "pointer",
@@ -561,6 +603,36 @@ export function Intake() {
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 12, marginTop: 16 }}>
               {pedigree.members.filter((m) => !m.missing).map((m) => {
+                if (inputType === "library") {
+                  const sel = librarySamples.find((x) => x.sample === picked[m.id]);
+                  const total = sel ? sel.files.reduce((n, f) => n + (f.size || 0), 0) : 0;
+                  return (
+                    <div key={m.id} style={{ display: "grid", gap: 6 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600 }}>{capitalize(m.role)} · <span className="mono">{m.id}</span></div>
+                      <select
+                        value={picked[m.id] ?? ""}
+                        onChange={(e) => setPicked((p) => ({ ...p, [m.id]: e.target.value }))}
+                        style={{ width: "100%", padding: "8px 10px" }}
+                        aria-label={`Library sample for ${m.role}`}
+                      >
+                        <option value="">— choose a sample —</option>
+                        {librarySamples.map((s) => (
+                          <option key={s.sample} value={s.sample} disabled={!s.r1}>
+                            {s.sample}{s.paired ? " (R1+R2)" : s.r1 ? " (R1 only)" : " (unpaired)"}
+                          </option>
+                        ))}
+                      </select>
+                      {sel ? (
+                        <div className="sample-map ok" style={{ flexDirection: "column", alignItems: "stretch", gap: 2 }}>
+                          <span>{sel.paired ? "Paired R1 + R2" : "R1 only"} · {humanBytes(total)}</span>
+                          <span className="mono" style={{ fontSize: 11, color: "var(--ink-soft)" }}>
+                            {sel.files.map((f) => f.name).join("  ·  ")}
+                          </span>
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                }
                 if (inputType === "fastq") {
                   const r1 = staged[m.id];
                   const r2 = staged[`${m.id}__R2`];
@@ -674,8 +746,8 @@ export function Intake() {
           Pedigree {pedigree.members.length >= 1 ? "✓" : "·"}
           {" · "}HPO {hpo.length >= 1 ? "✓" : "·"}
           {" · "}History {history.trim().length >= 20 ? "✓" : "·"}
-          {" · "}Proband {inputType === "fastq" ? "FASTQ" : "data"} {probandStaged ? "✓" : "·"}
-          {" · "}{inputType === "fastq" ? "Pairs" : "Files"} <span className="mono">{vcfReadyCount}/{presentMembers.length}</span>
+          {" · "}Proband {inputType === "library" ? "sample" : inputType === "fastq" ? "FASTQ" : "data"} {probandStaged ? "✓" : "·"}
+          {" · "}{inputType === "library" ? "Samples" : inputType === "fastq" ? "Pairs" : "Files"} <span className="mono">{vcfReadyCount}/{presentMembers.length}</span>
           {missingCount ? <span style={{ color: "var(--accent)", marginLeft: 4 }}>({missingCount} no sample)</span> : null}
           {unresolvedMismatches.length ? <span style={{ color: "var(--accent)", marginLeft: 8 }}>· {unresolvedMismatches.length} unresolved mismatch</span> : null}
           {runMsg ? <span style={{ marginLeft: 16, color: runStage === "error" ? "var(--accent)" : "var(--primary)" }}>{runMsg}</span> : null}

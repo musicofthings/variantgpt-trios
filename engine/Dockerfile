@@ -37,6 +37,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         bwa \
         samtools bcftools bedtools tabix \
         tcl \
+        rclone \
         curl unzip git ca-certificates procps make \
     && rm -rf /var/lib/apt/lists/*
 

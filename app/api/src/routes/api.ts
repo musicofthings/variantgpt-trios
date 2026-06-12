@@ -363,6 +363,120 @@ apiRouter.delete("/cases/:id/uploads/:role/multipart/:uploadId", async (c) => {
   return c.json({ ok: true });
 });
 
+// ───────────────────────── data library (FTP-synced samples) ─────────────────────────
+//
+// The partner lab's SFTP is synced daily into R2 under data/incoming/<sample>/
+// (one folder per sample) by tracks/sync_ftp_to_r2.sh. The Data section browses
+// these and assigns a sample's R1/R2 to a case role WITHOUT any download/upload —
+// the engine pulls the data/ keys straight from R2.
+
+const DATA_PREFIX = "data/incoming/";
+
+/** Infer the paired-end mate from a FASTQ filename (Illumina conventions). */
+function detectFastqMate(name: string): "R1" | "R2" | "" {
+  const n = name.toLowerCase();
+  if (n.includes("_r1") || n.includes(".r1.") || n.includes("_1.fastq") || n.includes("_1.fq")) return "R1";
+  if (n.includes("_r2") || n.includes(".r2.") || n.includes("_2.fastq") || n.includes("_2.fq")) return "R2";
+  return "";
+}
+
+function isFastqName(name: string): boolean {
+  return /\.(fastq|fq)(\.gz)?$/i.test(name);
+}
+
+/**
+ * GET /api/data/samples?q=<substr>
+ * → { samples: [{ sample, paired, r1, r2, files:[{key,name,mate,size}] }] }
+ *
+ * One folder per sample under data/incoming/. Lists folders, then the FASTQs in
+ * each, grouping R1/R2. Optional `q` filters by sample-folder name.
+ */
+apiRouter.get("/data/samples", async (c) => {
+  const q = (c.req.query("q") ?? "").toLowerCase();
+
+  // 1. Sample folders (R2 list with delimiter → delimitedPrefixes).
+  const folders: string[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await c.env.BUCKET.list({ prefix: DATA_PREFIX, delimiter: "/", cursor, limit: 1000 });
+    for (const p of page.delimitedPrefixes ?? []) folders.push(p);
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+
+  // 2. Files per folder (cap the number of folders we expand per request).
+  const samples: Array<{
+    sample: string; paired: boolean; r1: string | null; r2: string | null;
+    files: { key: string; name: string; mate: string; size: number }[];
+  }> = [];
+  for (const folder of folders) {
+    const sample = folder.slice(DATA_PREFIX.length).replace(/\/$/, "");
+    if (q && !sample.toLowerCase().includes(q)) continue;
+    if (samples.length >= 500) break; // safety cap
+
+    const files: { key: string; name: string; mate: string; size: number }[] = [];
+    let ic: string | undefined;
+    do {
+      const inner = await c.env.BUCKET.list({ prefix: folder, cursor: ic, limit: 1000 });
+      for (const o of inner.objects) {
+        const name = o.key.split("/").pop() ?? "";
+        if (!isFastqName(name)) continue;
+        files.push({ key: o.key, name, mate: detectFastqMate(name), size: o.size });
+      }
+      ic = inner.truncated ? inner.cursor : undefined;
+    } while (ic);
+    if (files.length === 0) continue;
+
+    const r1 = files.find((f) => f.mate === "R1");
+    const r2 = files.find((f) => f.mate === "R2");
+    samples.push({ sample, paired: !!(r1 && r2), r1: r1?.key ?? null, r2: r2?.key ?? null, files });
+  }
+
+  samples.sort((a, b) => a.sample.localeCompare(b.sample));
+  return c.json({ samples });
+});
+
+/**
+ * POST /api/cases/:id/data-assign
+ *   body = { assignments: [{ role, mate, key }] }
+ * → { ok, assigned }
+ *
+ * Point a case's uploads at existing data-library R2 objects (no copy). The
+ * normal /run path then signs these keys for the engine. Keys must live under
+ * data/ and the objects must exist.
+ */
+apiRouter.post("/cases/:id/data-assign", async (c) => {
+  const id = sanitize(c.req.param("id"));
+  if (!id) return c.json({ error: "bad caseId" }, 400);
+  const body = await c.req.json<{ assignments: { role: string; mate: string; key: string }[] }>();
+  if (!Array.isArray(body?.assignments) || body.assignments.length === 0) {
+    return c.json({ error: "no assignments" }, 400);
+  }
+
+  await c.env.DB.prepare(
+    `INSERT INTO cases (id, name, status) VALUES (?, ?, 'draft') ON CONFLICT(id) DO NOTHING`,
+  ).bind(id, `Case ${id}`).run();
+
+  let assigned = 0;
+  for (const a of body.assignments) {
+    const mate = a.mate ?? "";
+    if (!ALLOWED_ROLES.has(a.role)) return c.json({ error: `bad role ${a.role}` }, 400);
+    if (!ALLOWED_MATES.has(mate)) return c.json({ error: `bad mate ${mate}` }, 400);
+    if (!a.key || !a.key.startsWith("data/")) return c.json({ error: `key must be under data/: ${a.key}` }, 400);
+    if (!(await c.env.BUCKET.head(a.key).catch(() => null))) {
+      return c.json({ error: `data object not found: ${a.key}` }, 404);
+    }
+    const filename = a.key.split("/").pop() ?? null;
+    await c.env.DB.prepare(
+      `INSERT INTO uploads (case_id, role, mate, r2_key, filename, uploaded_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(case_id, role, mate) DO UPDATE SET
+         r2_key=excluded.r2_key, filename=excluded.filename, uploaded_at=excluded.uploaded_at`,
+    ).bind(id, a.role, mate, a.key, filename, Date.now()).run();
+    assigned++;
+  }
+  return c.json({ ok: true, assigned });
+});
+
 /** Shape of the manifest the SPA sends and we persist in jobs.manifest_json. */
 interface CaseManifest {
   pedigree: { id: string; role: string; sex: string; affected: boolean; missing?: boolean; sample_name?: string }[];
