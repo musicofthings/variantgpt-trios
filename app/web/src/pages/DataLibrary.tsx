@@ -79,7 +79,12 @@ export function DataLibrary() {
                 const total = s.files.reduce((n, f) => n + (f.size || 0), 0);
                 return (
                   <tr key={s.sample}>
-                    <td className="mono"><strong>{s.sample}</strong></td>
+                    <td className="mono">
+                      <strong>{s.sample}</strong>
+                      {s.path !== s.sample ? (
+                        <div style={{ fontSize: 10, color: "var(--ink-soft)" }}>{s.path.replace(/\/[^/]*$/, "") || "—"}</div>
+                      ) : null}
+                    </td>
                     <td style={{ textAlign: "center" }}>
                       <span style={{ display: "inline-flex", gap: 4, justifyContent: "center" }}>
                         {s.vcf ? <span className="pill" style={{ fontSize: 10, color: "var(--primary)" }}>VCF</span> : null}

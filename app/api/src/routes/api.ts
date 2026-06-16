@@ -390,60 +390,58 @@ function isVcfName(name: string): boolean {
 
 /**
  * GET /api/data/samples?q=<substr>
- * → { samples: [{ sample, paired, r1, r2, files:[{key,name,mate,size}] }] }
+ * → { samples: [{ sample, path, paired, r1, r2, vcf, files:[{key,name,kind,mate,size}] }] }
  *
- * One folder per sample under data/incoming/. Lists folders, then the FASTQs in
- * each, grouping R1/R2. Optional `q` filters by sample-folder name.
+ * Partner layout is data/incoming/<batch>/<patient>/<files> (a batch folder with
+ * a patient folder inside). We list objects recursively and group them by the
+ * folder that actually CONTAINS the FASTQ/VCF files — so it works at any nesting
+ * depth. `sample` is the patient (deepest folder), `path` is the full relative
+ * folder (for uniqueness). A patient may have a VCF (fast path) and/or paired
+ * FASTQ R1/R2 (re-call). Optional `q` filters by folder path.
  */
 apiRouter.get("/data/samples", async (c) => {
   const q = (c.req.query("q") ?? "").toLowerCase();
 
-  // 1. Sample folders (R2 list with delimiter → delimitedPrefixes).
-  const folders: string[] = [];
-  let cursor: string | undefined;
-  do {
-    const page = await c.env.BUCKET.list({ prefix: DATA_PREFIX, delimiter: "/", cursor, limit: 1000 });
-    for (const p of page.delimitedPrefixes ?? []) folders.push(p);
-    cursor = page.truncated ? page.cursor : undefined;
-  } while (cursor);
-
-  // 2. Files per folder (cap the number of folders we expand per request).
-  //    A sample folder may hold a VCF (partner's calls — fast path) AND paired
-  //    FASTQ R1/R2 (re-call from reads — full pipeline). Surface both.
   type LibFile = { key: string; name: string; kind: "fastq" | "vcf"; mate: string; size: number };
+  const byFolder = new Map<string, LibFile[]>();
+
+  let cursor: string | undefined;
+  let scanned = 0;
+  do {
+    const page = await c.env.BUCKET.list({ prefix: DATA_PREFIX, cursor, limit: 1000 });
+    for (const o of page.objects) {
+      const name = o.key.split("/").pop() ?? "";
+      const kind: "fastq" | "vcf" | null = isFastqName(name) ? "fastq" : isVcfName(name) ? "vcf" : null;
+      if (!kind) continue; // ignore hash.md5, indexes, etc.
+      const rel = o.key.slice(DATA_PREFIX.length);          // <batch>/<patient>/<file>
+      const slash = rel.lastIndexOf("/");
+      const folder = slash >= 0 ? rel.slice(0, slash) : ""; // <batch>/<patient>
+      if (!byFolder.has(folder)) byFolder.set(folder, []);
+      byFolder.get(folder)!.push({
+        key: o.key, name, kind, mate: kind === "fastq" ? detectFastqMate(name) : "", size: o.size,
+      });
+    }
+    cursor = page.truncated ? page.cursor : undefined;
+    scanned += page.objects.length;
+  } while (cursor && scanned < 50000); // safety cap on a large/growing archive
+
   const samples: Array<{
-    sample: string; paired: boolean;
-    r1: string | null; r2: string | null; vcf: string | null;
-    files: LibFile[];
+    sample: string; path: string; paired: boolean;
+    r1: string | null; r2: string | null; vcf: string | null; files: LibFile[];
   }> = [];
-  for (const folder of folders) {
-    const sample = folder.slice(DATA_PREFIX.length).replace(/\/$/, "");
-    if (q && !sample.toLowerCase().includes(q)) continue;
-    if (samples.length >= 500) break; // safety cap
-
-    const files: LibFile[] = [];
-    let ic: string | undefined;
-    do {
-      const inner = await c.env.BUCKET.list({ prefix: folder, cursor: ic, limit: 1000 });
-      for (const o of inner.objects) {
-        const name = o.key.split("/").pop() ?? "";
-        if (isFastqName(name)) files.push({ key: o.key, name, kind: "fastq", mate: detectFastqMate(name), size: o.size });
-        else if (isVcfName(name)) files.push({ key: o.key, name, kind: "vcf", mate: "", size: o.size });
-      }
-      ic = inner.truncated ? inner.cursor : undefined;
-    } while (ic);
-    if (files.length === 0) continue;
-
+  for (const [folder, files] of byFolder) {
+    if (q && !folder.toLowerCase().includes(q)) continue;
+    const sample = folder.split("/").pop() || folder; // patient = deepest folder name
     const r1 = files.find((f) => f.kind === "fastq" && f.mate === "R1");
     const r2 = files.find((f) => f.kind === "fastq" && f.mate === "R2");
     const vcf = files.find((f) => f.kind === "vcf");
     samples.push({
-      sample, paired: !!(r1 && r2),
+      sample, path: folder, paired: !!(r1 && r2),
       r1: r1?.key ?? null, r2: r2?.key ?? null, vcf: vcf?.key ?? null, files,
     });
   }
 
-  samples.sort((a, b) => a.sample.localeCompare(b.sample));
+  samples.sort((a, b) => a.path.localeCompare(b.path));
   return c.json({ samples });
 });
 

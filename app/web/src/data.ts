@@ -10,7 +10,8 @@ export interface LibraryFile {
 }
 
 export interface LibrarySample {
-  sample: string;       // = patient folder name (PHI — shown only in the authed app)
+  sample: string;       // patient folder name (deepest) — PHI, shown only in the authed app
+  path: string;         // full relative folder <batch>/<patient> — unique id
   paired: boolean;      // has FASTQ R1 + R2
   r1: string | null;
   r2: string | null;

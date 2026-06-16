@@ -226,7 +226,7 @@ export function Intake() {
   //   fastq mode → paired R1 (key = id) + R2 (key = `${id}__R2`)
   function memberReady(id: string): boolean {
     if (inputType === "library") {
-      const s = librarySamples.find((x) => x.sample === picked[id]);
+      const s = librarySamples.find((x) => x.path === picked[id]);
       if (!s) return false;
       const t = pickedType[id] ?? (s.vcf ? "vcf" : "fastq");
       return t === "vcf" ? !!s.vcf : !!s.r1;
@@ -290,7 +290,7 @@ export function Intake() {
         setRunMsg("Assigning library samples…");
         const assignments: { role: string; mate: "R1" | "R2" | ""; key: string }[] = [];
         for (const m of presentMembers) {
-          const s = librarySamples.find((x) => x.sample === picked[m.id]);
+          const s = librarySamples.find((x) => x.path === picked[m.id]);
           if (!s) continue;
           const t = pickedType[m.id] ?? (s.vcf ? "vcf" : "fastq");
           if (t === "vcf" && s.vcf) {
@@ -613,7 +613,7 @@ export function Intake() {
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 12, marginTop: 16 }}>
               {pedigree.members.filter((m) => !m.missing).map((m) => {
                 if (inputType === "library") {
-                  const sel = librarySamples.find((x) => x.sample === picked[m.id]);
+                  const sel = librarySamples.find((x) => x.path === picked[m.id]);
                   const total = sel ? sel.files.reduce((n, f) => n + (f.size || 0), 0) : 0;
                   return (
                     <div key={m.id} style={{ display: "grid", gap: 6 }}>
@@ -626,8 +626,8 @@ export function Intake() {
                       >
                         <option value="">— choose a sample —</option>
                         {librarySamples.map((s) => (
-                          <option key={s.sample} value={s.sample} disabled={!s.r1}>
-                            {s.sample}{s.paired ? " (R1+R2)" : s.r1 ? " (R1 only)" : " (unpaired)"}
+                          <option key={s.path} value={s.path} disabled={!s.r1 && !s.vcf}>
+                            {s.sample}{s.vcf ? " · VCF" : ""}{s.paired ? " · FASTQ" : s.r1 ? " · R1" : ""}
                           </option>
                         ))}
                       </select>
