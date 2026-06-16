@@ -1,15 +1,17 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
-import { fetchLibrarySamples, humanBytes, type LibrarySample } from "../data";
+import { useNavigate } from "react-router-dom";
+import { fetchLibrarySamples, humanBytes, setDataSelection, type LibrarySample } from "../data";
 
 /** Data section — browse the partner-lab samples synced from SFTP into R2
- *  (data/incoming/, one folder per sample, refreshed daily). From here a sample
- *  can be sent straight into a new case (server-side; no download/upload). */
+ *  (data/incoming/, refreshed daily). Tick samples and "New case" carries them
+ *  straight into the pipeline (server-side; no download/upload). */
 export function DataLibrary() {
   const [samples, setSamples] = useState<LibrarySample[]>([]);
   const [q, setQ] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set()); // sample paths
+  const navigate = useNavigate();
 
   useEffect(() => {
     let cancelled = false;
@@ -24,6 +26,25 @@ export function DataLibrary() {
   }, [q]);
 
   const paired = samples.filter((s) => s.paired).length;
+  const usable = samples.filter((s) => s.r1 || s.vcf);
+  const allSelected = usable.length > 0 && usable.every((s) => selected.has(s.path));
+
+  function toggle(path: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path); else next.add(path);
+      return next;
+    });
+  }
+  function toggleAll() {
+    setSelected(allSelected ? new Set() : new Set(usable.map((s) => s.path)));
+  }
+  function startCase() {
+    // Preserve the visible order of the selected samples (proband first).
+    const ordered = samples.filter((s) => selected.has(s.path)).map((s) => s.path);
+    setDataSelection(ordered);
+    navigate("/cases/new"); // pipeline picker → Intake pre-fills these
+  }
 
   return (
     <>
@@ -31,7 +52,16 @@ export function DataLibrary() {
         <h1>Data library</h1>
         <span className="pill">{samples.length} samples</span>
         {paired > 0 ? <span className="pill">{paired} paired</span> : null}
-        <Link to="/cases/new" style={{ marginLeft: "auto" }}><button className="primary">New case from data →</button></Link>
+        {selected.size > 0 ? <span className="pill" style={{ color: "var(--primary)" }}>{selected.size} selected</span> : null}
+        <button
+          className="primary"
+          style={{ marginLeft: "auto" }}
+          disabled={selected.size === 0}
+          title={selected.size === 0 ? "Tick one or more samples first" : "Start a case with the selected samples"}
+          onClick={startCase}
+        >
+          New case from {selected.size || ""} sample{selected.size === 1 ? "" : "s"} →
+        </button>
       </div>
 
       <section className="card" style={{ marginBottom: 16 }}>
@@ -67,6 +97,9 @@ export function DataLibrary() {
           <table className="table" style={{ fontSize: 13 }}>
             <thead>
               <tr>
+                <th style={{ width: 32, textAlign: "center" }}>
+                  <input type="checkbox" checked={allSelected} onChange={toggleAll} aria-label="Select all" />
+                </th>
                 <th style={{ textAlign: "left" }}>Sample (patient)</th>
                 <th style={{ width: 130 }}>Available</th>
                 <th style={{ width: 70 }}>Files</th>
@@ -77,8 +110,18 @@ export function DataLibrary() {
             <tbody>
               {samples.map((s) => {
                 const total = s.files.reduce((n, f) => n + (f.size || 0), 0);
+                const selectable = !!(s.r1 || s.vcf);
                 return (
-                  <tr key={s.sample}>
+                  <tr key={s.path} style={{ background: selected.has(s.path) ? "var(--primary-soft)" : undefined }}>
+                    <td style={{ textAlign: "center" }}>
+                      <input
+                        type="checkbox"
+                        checked={selected.has(s.path)}
+                        disabled={!selectable}
+                        onChange={() => toggle(s.path)}
+                        aria-label={`Select ${s.sample}`}
+                      />
+                    </td>
                     <td className="mono">
                       <strong>{s.sample}</strong>
                       {s.path !== s.sample ? (

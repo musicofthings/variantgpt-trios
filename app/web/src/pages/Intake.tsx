@@ -8,7 +8,7 @@ import { pedigreeForMode, type PedigreeState } from "../types-pedigree";
 import { autoMapSample, sniffFile } from "../vcfSniff";
 import { api, apiFetch } from "../apiBase";
 import { uploadStaged } from "../upload";
-import { fetchLibrarySamples, assignDataToCase, humanBytes, type LibrarySample } from "../data";
+import { fetchLibrarySamples, assignDataToCase, humanBytes, takeDataSelection, type LibrarySample } from "../data";
 
 /** Mode → human label for the topbar pill. Drives only display; the engine
  *  reasons about whichever members the pedigree contains. */
@@ -85,6 +85,20 @@ export function Intake() {
       return () => clearTimeout(t);
     }
   }, [jobStatus?.status, caseId, navigate]);
+
+  // Pre-fill from a Data-section selection ("New case from data" flow): switch to
+  // library mode and assign the chosen samples to present members in order
+  // (proband first). Consume-once.
+  useEffect(() => {
+    const paths = takeDataSelection();
+    if (!paths.length) return;
+    setInputType("library");
+    const present = pedigree.members.filter((m) => !m.missing);
+    const pre: Record<string, string> = {};
+    present.forEach((m, i) => { if (paths[i]) pre[m.id] = paths[i]; });
+    setPicked(pre);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Load data-library samples when the user switches to library mode.
   useEffect(() => {

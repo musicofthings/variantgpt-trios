@@ -43,6 +43,20 @@ export async function assignDataToCase(
   }
 }
 
+// Carries a Data-section selection (sample folder paths) into the New-case flow.
+const DATA_SELECTION_KEY = "vgpt:data-selection";
+export function setDataSelection(paths: string[]): void {
+  try { sessionStorage.setItem(DATA_SELECTION_KEY, JSON.stringify(paths)); } catch { /* ignore */ }
+}
+/** Read AND clear the pending selection (consume-once). */
+export function takeDataSelection(): string[] {
+  try {
+    const raw = sessionStorage.getItem(DATA_SELECTION_KEY);
+    sessionStorage.removeItem(DATA_SELECTION_KEY);
+    return raw ? (JSON.parse(raw) as string[]) : [];
+  } catch { return []; }
+}
+
 export function humanBytes(n: number): string {
   const u = ["B", "KB", "MB", "GB", "TB"];
   let i = 0;
