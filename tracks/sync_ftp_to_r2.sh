@@ -2,8 +2,9 @@
 # Daily partner-lab SFTP -> R2 sync.
 #
 # Pulls sample folders from the partner SFTP straight into R2 (server-to-server,
-# no laptop round-trip) under data/incoming/. Designed to run on a Fly scheduled
-# machine (cron). Idempotent: rclone sync only transfers new/changed files.
+# no laptop round-trip) under data/incoming/. Runs daily (cron). Idempotent:
+# rclone COPY only transfers files not already in R2 (by size), and NEVER deletes
+# — so R2 is a durable, growing archive even after the partner purges old data.
 #
 # Required env (set as Fly app secrets — never commit):
 #   FTP_HOST FTP_USER FTP_PASS               partner SFTP login
@@ -48,10 +49,12 @@ CONF
 
 echo "[$(date -u +%FT%TZ)] sync sftp://${FTP_HOST}:${FTP_PORT}${FTP_PATH} -> r2:${R2_BUCKET}/${DATA_PREFIX}"
 
-# --size-only: SFTP has no cheap checksum, so compare by size (filenames are
-# unique per sample); avoids re-pulling unchanged multi-GB FASTQs each day.
-# Subset/limits can be passed via RCLONE_EXTRA (e.g. --include or --max-transfer).
-rclone --config "$CFG" sync "partner:${FTP_PATH}" "r2:${R2_BUCKET}/${DATA_PREFIX}" \
+# copy (not sync): never deletes from R2 — accumulating archive.
+# --size-only: SFTP has no cheap checksum, so skip files already in R2 with the
+# same size (avoids re-pulling unchanged multi-GB FASTQs each day).
+# RCLONE_EXTRA carries retention/limit flags, e.g. --max-age 180d (partner purges
+# old data, so this skips scanning empty old folders).
+rclone --config "$CFG" copy "partner:${FTP_PATH}" "r2:${R2_BUCKET}/${DATA_PREFIX}" \
   --s3-no-check-bucket \
   --size-only \
   --transfers 4 --checkers 8 \
