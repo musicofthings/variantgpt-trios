@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from variantgpt_engine.acmg import cnv
-from variantgpt_engine.models import DosageRegion, MemberCall, StructuralVariant
+from variantgpt_engine.models import DosageRegion, StructuralVariant
 
 
 def _sv(**kw) -> StructuralVariant:

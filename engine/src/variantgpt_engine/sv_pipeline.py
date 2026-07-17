@@ -51,7 +51,6 @@ def assign_sv_inheritance(sv: StructuralVariant, pedigree: Pedigree) -> None:
         if zyg.get(proband_id) not in _CARRIER:
             continue
         fa, mo = parents.get(proband_id, (None, None))
-        fa_z, mo_z = zyg.get(fa), zyg.get(mo)
         parent_states = [(p, zyg.get(p)) for p in (fa, mo) if p]
         carrier_parents = [p for p, z in parent_states if z in _CARRIER]
         noncarrier_parents = [p for p, z in parent_states if z == "hom_ref"]
