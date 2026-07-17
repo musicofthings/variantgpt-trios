@@ -34,7 +34,7 @@ jobs:
       api: ${{ steps.filter.outputs.api }}
       web: ${{ steps.filter.outputs.web }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dorny/paths-filter@v3
         id: filter
         with:
@@ -61,7 +61,7 @@ jobs:
     if: ${{ needs.changes.outputs.engine == 'true' || github.event_name == 'workflow_dispatch' }}
     concurrency: { group: fly-engine, cancel-in-progress: false }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: superfly/flyctl-actions/setup-flyctl@master
 
       # Create the Fly app on first run (idempotent: re-running is a no-op).
@@ -107,8 +107,8 @@ jobs:
       (needs.changes.outputs.api == 'true' || github.event_name == 'workflow_dispatch')
     defaults: { run: { working-directory: app/api } }
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with: { node-version: "20" }
       - run: npm ci || npm install
       - run: npm run typecheck
@@ -142,8 +142,8 @@ jobs:
       # to dev-mode pass-through (no auth required client-side).
       VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.VITE_CLERK_PUBLISHABLE_KEY }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with: { node-version: "20" }
       - run: npm ci || npm install
       - run: npm run build
