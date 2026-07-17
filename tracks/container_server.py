@@ -87,6 +87,56 @@ MAX_AF_LOOKUP_CAP = 200000
 AF_LOOKUP_CHUNK_SIZE = 5000
 
 
+# ───────────────────────── scale-to-zero (self-stop) ─────────────────────────
+#
+# fly.toml runs this app with min_machines_running=0 and auto_stop_machines=off,
+# so Fly cold-starts a machine on an incoming /run (auto_start) but never stops
+# it on its own — critical, because the Worker's connection drops ~30s in while
+# a case takes minutes, and Fly's idle-stop would otherwise kill the job. Instead
+# the machine stops ITSELF once no job is in flight, via the Fly Machines API, so
+# we pay only for actual run-seconds.
+#
+# Enabled only when running on Fly with a token (FLY_API_TOKEN secret +
+# Fly-injected FLY_MACHINE_ID/FLY_APP_NAME). Locally all three are unset and
+# self-stop is a no-op, so dev servers stay up.
+#   Create the token:  fly tokens create deploy -a variantgpt-engine
+#   Set it as a secret: fly secrets set FLY_API_TOKEN=<token>
+_active_jobs = 0
+# Delay before a post-job stop so the HTTP response flushes and a just-arrived
+# request can register in _active_jobs (cancelling the stop).
+_POST_JOB_IDLE_DELAY_S = 5.0
+# Longer grace at startup: a machine cold-started by a /run must give that request
+# time to arrive; a machine started by a bare `fly deploy` (no job) self-stops
+# after this so a deploy doesn't leave an idle machine billing.
+_STARTUP_IDLE_GRACE_S = 120.0
+
+
+async def _self_stop_if_idle(delay: float) -> None:
+    """After `delay` seconds, if no job is in flight, stop this Fly machine.
+    Best-effort: any failure just leaves the machine running."""
+    await asyncio.sleep(delay)
+    if _active_jobs > 0:
+        return  # a job arrived or is still running — stay up
+    token = os.environ.get("FLY_API_TOKEN")
+    machine_id = os.environ.get("FLY_MACHINE_ID")
+    app_name = os.environ.get("FLY_APP_NAME")
+    if not (token and machine_id and app_name):
+        return  # not on Fly / no token — never self-stop (local dev)
+    url = f"https://api.machines.dev/v1/apps/{app_name}/machines/{machine_id}/stop"
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.post(url, headers={"Authorization": f"Bearer {token}"})
+        print(f"[self-stop] stop {machine_id} -> {r.status_code}", flush=True)
+    except Exception as e:  # noqa: BLE001 — machine stays up on failure
+        print(f"[self-stop] failed (machine stays up): {e}", flush=True)
+
+
+async def _on_startup() -> None:
+    # Guard against a machine that was started but never handed a job (e.g. a
+    # bare deploy): scale back to zero after the startup grace if still idle.
+    asyncio.create_task(_self_stop_if_idle(_STARTUP_IDLE_GRACE_S))
+
+
 def _check_bearer(request: Request) -> JSONResponse | None:
     """Reject requests that don't present the shared bearer token. Set via the
     ENGINE_BEARER env / Fly secret. Health endpoint is exempt."""
@@ -120,11 +170,12 @@ async def run(request: Request) -> JSONResponse:
     if missing:
         return JSONResponse({"error": f"missing fields: {missing}"}, status_code=400)
 
-    # Run synchronously: Fly's auto_stop_machines=stop kills the machine when
-    # no HTTP request is in flight, which would orphan a background task. By
-    # awaiting the job, the request stays open and the machine stays warm. The
-    # Worker holds the connection open via executionCtx.waitUntil — it doesn't
-    # block the user, who is already polling /status backed by D1.
+    # Run synchronously (the job takes minutes; the Worker fires-and-forgets via
+    # executionCtx.waitUntil and polls /status backed by D1). auto_stop is OFF in
+    # fly.toml so Fly won't kill the machine when the Worker's connection drops
+    # mid-job; instead we self-stop below once the machine goes idle.
+    global _active_jobs
+    _active_jobs += 1
     try:
         await _execute_job(body)
     except Exception as e:  # noqa: BLE001 — surface to caller + logs
@@ -134,6 +185,13 @@ async def run(request: Request) -> JSONResponse:
             {"ok": False, "case_id": body.get("case_id"), "error": f"{type(e).__name__}: {e}"},
             status_code=500,
         )
+    finally:
+        _active_jobs -= 1
+        # Last job done → scale this machine back to zero. Scheduled (not awaited)
+        # so the HTTP response returns first; the delayed idle re-check lets a
+        # just-arrived job cancel the stop (concurrency hard_limit is 5).
+        if _active_jobs == 0:
+            asyncio.create_task(_self_stop_if_idle(_POST_JOB_IDLE_DELAY_S))
     return JSONResponse({"ok": True, "case_id": body["case_id"]}, status_code=200)
 
 
@@ -1041,4 +1099,5 @@ app = Starlette(
         Route("/healthz", healthz, methods=["GET"]),
         Route("/run", run, methods=["POST"]),
     ],
+    on_startup=[_on_startup],
 )

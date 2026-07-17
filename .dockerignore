@@ -1,0 +1,28 @@
+# The Fly engine image is built from the repo root (engine/Dockerfile) but only
+# needs engine/ + tracks/ (see the COPY lines in engine/Dockerfile). Everything
+# else just inflates the build context uploaded to the remote builder on every
+# deploy (~398 MB → a few MB). Do NOT ignore engine/ or tracks/.
+
+# Frontend + edge API — the largest offender (node_modules, dist): not in the image
+app/
+
+# VCS, CI, editor cruft
+.git/
+.github/
+**/.DS_Store
+
+# Docs, notebooks, sample data, infra manifests — not used at engine runtime
+notebooks/
+data/
+infra/
+
+# Python caches / local venvs / test + lint artifacts
+**/__pycache__/
+**/*.pyc
+**/.venv/
+**/.pytest_cache/
+**/.ruff_cache/
+engine/tests/
+
+# Local Fly / Wrangler state
+.wrangler/

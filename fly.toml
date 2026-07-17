@@ -39,15 +39,17 @@ primary_region = "iad"          # change to closer region (e.g. "bom" for Mumbai
 [http_service]
   internal_port = 8080
   force_https = true
-  # Keep one machine warm at all times. With auto_stop=stop + min=0 the proxy
-  # would kill the machine ~60-300s after the inbound /run request appeared
-  # idle to it (which happens at ~30s when the Worker's executionCtx.waitUntil
-  # expires and the Worker→Fly TCP connection drops). The engine job would
-  # die mid-pipeline. min_machines_running=1 fixes that. Free-tier covers up
-  # to 3 shared-cpu-1x machines so this stays within the free allotment.
-  auto_stop_machines = "stop"
+  # Scale-to-zero (pay only for run-seconds). auto_start cold-starts a machine on
+  # an inbound /run; auto_stop is OFF so Fly never idle-stops mid-job (the Worker
+  # connection drops ~30s in while a case runs for minutes — Fly's idle-stop would
+  # otherwise kill it). Instead the engine stops ITSELF once idle, via the Fly
+  # Machines API (see _self_stop_if_idle in tracks/container_server.py). Requires:
+  #   fly tokens create deploy -a variantgpt-engine
+  #   fly secrets set FLY_API_TOKEN=<that token>
+  # Without the token the engine never self-stops (safe fallback: stays running).
+  auto_stop_machines = "off"
   auto_start_machines = true
-  min_machines_running = 1
+  min_machines_running = 0
   processes = ["app"]
 
   [http_service.concurrency]
@@ -56,22 +58,19 @@ primary_region = "iad"          # change to closer region (e.g. "bom" for Mumbai
     soft_limit = 3
 
 [[vm]]
-  # shared-cpu-4x with 8 GB. Sized for clinical-grade trio workloads:
-  #   - 4 vCPUs let asyncio.gather + httpx schedule more concurrent
-  #     network requests without core contention (the AF lookup,
-  #     VEP REST, ClinVar overlay, and IndiGen passes all benefit).
-  #   - 8 GB removes the headroom worry entirely. We've optimized peak
-  #     to ~2-3 GB via chunking + gc; this gives 2-3× safety margin
-  #     so a single large case (e.g. WGS with low pre-filter) can't
-  #     OOM.
-  #   - Cost ~$57/mo always-on (min_machines_running=1). Worth the
-  #     bump vs $26/mo on shared-cpu-2x because annotate+classify
-  #     drops ~30-40% wall-clock with twice the CPU available.
-  # Cap is shared-cpu-8x / 16 GB if we ever need more; beyond that
-  # the workload is network-bound and a bigger VM won't help.
+  # shared-cpu-2x with 4 GB. The workload is network-bound (AF lookup, VEP REST,
+  # ClinVar overlay, IndiGen — all asyncio + httpx), so extra vCPUs mostly idle
+  # waiting on I/O, and measured peak memory is ~2-3 GB (chunking + gc). 4 GB
+  # keeps ~1.3-2× headroom over peak; 2 vCPUs still overlap network waits fine.
+  #
+  # Cost: with scale-to-zero (see [http_service]) this only bills while a case
+  # runs — a few cents per trio, ~$0 idle (vs ~$57/mo always-on at the previous
+  # shared-cpu-4x/8 GB). The smaller size also makes each run cheaper. If you
+  # ever see an OOM on an unusually large WGS case, bump memory_mb to 6144 before
+  # adding vCPUs (the bottleneck is RAM/network, not CPU).
   cpu_kind = "shared"
-  cpus = 4
-  memory_mb = 8192
+  cpus = 2
+  memory_mb = 4096
 
 # Auth: the Worker passes a shared bearer in Authorization: Bearer <token>.
 # Set as a Fly secret (not in [env]):

@@ -9,13 +9,47 @@ See [VariantGPT_PRD_TRD.md](VariantGPT_PRD_TRD.md) for product/technical require
 ```
 Cloudflare Pages (variantgpt-web)            ← React SPA build (Vite + TS)
    │
-Cloudflare Worker (variantgpt-api, Hono)     ← /api/* edge surface
-   ├── D1   (variantgpt)                     ← cases, members, jobs, uploads
+Cloudflare Worker (variantgpt-api, Hono)     ← /api/* edge surface (the ONE
+   │                                            case API; Clerk-authed, per-case
+   │                                            owner-scoped — see Security below)
+   ├── D1   (variantgpt)                     ← cases (owner_id), members, jobs, uploads
    ├── R2   (variantgpt)                     ← VCFs, case.json, reports, caches
-   └── Fly.io machine (variantgpt-engine)    ← Python engine, ~/tracks/container_server.py
+   └── Fly.io machine (variantgpt-engine)    ← Python engine, tracks/container_server.py
                                                 (was Cloudflare Containers; pivoted
-                                                to Fly for memory headroom)
+                                                to Fly for memory headroom). Scales to
+                                                zero: cold-starts on /run, stops itself
+                                                when idle — see Engine lifecycle below.
 ```
+
+### Security & tenancy
+
+The `/api/*` Worker surface is the single canonical case API. Every request is
+Clerk-JWT authenticated, and every case-scoped route is **owner-scoped**: a case
+is stamped with its creator's user id (`cases.owner_id`, migration
+`0004_case_owner.sql`) and a middleware 404s anyone else. When `CLERK_ISSUER` is
+unset the Worker runs single-tenant dev mode (synthetic user). CORS reads an
+`ALLOWED_ORIGINS` allowlist (never `*` in prod).
+
+### Engine lifecycle & cost (scale-to-zero)
+
+The Fly engine is a self-stopping worker, so you pay only for run-seconds:
+
+- `fly.toml` sets `min_machines_running = 0` and `auto_stop_machines = "off"`.
+- The Worker's `/run` cold-starts the machine (`auto_start`); Fly never idle-stops
+  it mid-job (a case runs for minutes after the Worker connection drops).
+- After the job posts its final callback, the engine stops **itself** via the Fly
+  Machines API (`_self_stop_if_idle` in `tracks/container_server.py`), gated on no
+  other in-flight job.
+
+Requires a Fly API token so the machine can stop itself:
+
+```
+fly tokens create deploy -a variantgpt-engine
+fly secrets set FLY_API_TOKEN=<token> -a variantgpt-engine
+```
+
+Without the token the engine simply never self-stops (safe fallback: stays up).
+VM is `shared-cpu-2x / 4 GB` (the workload is network-bound; peak RAM ~2–3 GB).
 
 ## Layout
 
@@ -62,6 +96,11 @@ npm run dev          # wrangler dev
 
 ### Deploy (CI)
 Push to `main` — `.github/workflows/deploy.yml` deploys engine → api → web in order. See [`infra/DEPLOY.md`](infra/DEPLOY.md) for first-time setup (Cloudflare secrets, Fly tokens, R2 CORS, D1 migrations).
+
+First-time setup gotchas for the changes above:
+- Apply D1 migrations before the Worker goes live — the API reads `cases.owner_id`: `wrangler d1 migrations apply variantgpt-db --remote`.
+- Set `FLY_API_TOKEN` (see *Engine lifecycle* above) **before** the engine deploys, or the machine won't self-stop.
+- Set `ALLOWED_ORIGINS` in `app/api/wrangler.toml` `[vars]` to the deployed SPA origin(s) for production.
 
 ## Pipelines
 
