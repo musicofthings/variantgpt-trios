@@ -1,7 +1,7 @@
 # VariantGPT — Session Handover
 
-**Last updated:** 2026-06-02
-**Working tree:** `D:\Projects\VariantGPT` (git: `musicofthings/variantgpt-trios`, branch `main` — 2026-06-02 roadmap sweep merged)
+**Last updated:** 2026-07-17
+**Working tree:** `~/projects/variantgpt-trios` (git: `musicofthings/variantgpt-trios`, branch `main` — 2026-07-17 security + scale-to-zero + CI sweep, HEAD `7cd0c91`)
 **Specs:** [`VariantGPT_PRD_TRD.md`](VariantGPT_PRD_TRD.md) · [`VariantGPT_Frontend_Design_Spec.md`](VariantGPT_Frontend_Design_Spec.md)
 **Deploy:** [`infra/DEPLOY.md`](infra/DEPLOY.md)
 
@@ -13,12 +13,13 @@ A fully functional production deploy on Cloudflare + Fly with the entire SPA→W
 
 ```
 Cloudflare Pages (variantgpt-web)                 ← React SPA (Vite + TS)
-   │ /api/*
+   │ /api/*  (the ONE case API — Clerk-authed + per-case owner-scoped)
 Cloudflare Worker (variantgpt-api, Hono)          ← edge surface
-   ├── D1   (cases, members, jobs, uploads)
+   ├── D1   (cases[owner_id], members, jobs, uploads)
    ├── R2   (VCFs, case.json, cache stages)
-   └── Fly.io machine (variantgpt-engine, 8GB)    ← Python engine via HTTP
-                                                    (tracks/container_server.py)
+   └── Fly.io machine (variantgpt-engine)         ← Python engine via HTTP
+        shared-cpu-2x / 4 GB, SCALES TO ZERO        (tracks/container_server.py)
+        (cold-starts on /run, self-stops when idle)
 ```
 
 ### Verified runs
@@ -82,6 +83,8 @@ A failed/OOM run resumes from the last completed chunk; only the bumped stage re
 - Worker `clerkAuthGated` middleware verifies JWT against Clerk JWKS (`jose` lib, JWKS cached per-isolate); validates `iss` + optional `aud`, extracts `sub` as user id
 - `isPublicPath()` bypass for `/health`, `/`, and HMAC-signed internal webhooks (engine-callback, indigen-proxy)
 - **Dev-mode fallback**: when `CLERK_ISSUER` Worker secret OR `VITE_CLERK_PUBLISHABLE_KEY` GHA variable is unset, the corresponding end becomes a pass-through. Production has both set
+
+**Tenant isolation (2026-07-17).** Auth proves *who*; ownership proves *may they touch this case*. Every case is stamped with its creator's Clerk `sub` (`cases.owner_id`, migration [`0004_case_owner.sql`](infra/migrations/0004_case_owner.sql)); a `caseAccessGate` middleware on `/cases/:id[/*]` in [`routes/api.ts`](app/api/src/routes/api.ts) 404s non-owners (claim-on-first-touch for legacy NULL-owner rows). `GET /cases` and `/cases/cleanup` are owner-scoped; the orphan R2 scan is dev-mode-only (can't attribute orphans to a user). `/api/*` is the **single canonical case API** — the old `/cases`, `/variants`, `/proposals` routers are unmounted (unreachable, unsecured, querying unpopulated D1 tables; kept for the future curator UI). CORS reads an `ALLOWED_ORIGINS` allowlist, never `*`.
 
 ---
 
@@ -204,13 +207,32 @@ The `VITE_API_BASE` is hardcoded in the workflow file itself.
 
 ### Required Worker secrets (`wrangler secret put …`)
 
-`R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ACCOUNT_ID`, `ENGINE_BEARER`, `ENGINE_WEBHOOK_SECRET`, `INDIGEN_PROXY_BEARER`, `CLERK_ISSUER` (e.g. `https://apt-ant-91.clerk.accounts.dev`), optional `CLERK_AUDIENCE`, plus existing AI Gateway / OpenRouter keys.
+`R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ACCOUNT_ID`, `ENGINE_BEARER`, `ENGINE_WEBHOOK_SECRET`, `INDIGEN_PROXY_BEARER`, `CLERK_ISSUER` (e.g. `https://apt-ant-91.clerk.accounts.dev`), optional `CLERK_AUDIENCE`, plus existing AI Gateway / OpenRouter keys. Set `ALLOWED_ORIGINS` (CORS allowlist, comma-separated) in `app/api/wrangler.toml` `[vars]` for production.
+
+### Required Fly secrets (`fly secrets set … -a variantgpt-engine`)
+
+`ENGINE_BEARER` (matches the Worker's), and **`FLY_API_TOKEN`** — the Machines API token the engine uses to stop itself for scale-to-zero (`fly tokens create deploy -a variantgpt-engine`). Without it the machine never self-stops (safe fallback: stays running). D1 migrations must be applied before the Worker goes live (`wrangler d1 migrations apply variantgpt-db --remote`) since the API reads `cases.owner_id`.
 
 ---
 
 ## Session log
 
-### 2026-06-02 (latest) — Roadmap sweep: PS1/PM5, rate limiting, LLM HPO, server-side report
+### 2026-07-17 (latest) — Security review, tenant isolation, Fly scale-to-zero, CI green
+
+Code-review pass on the deployed stack, then fixes shipped in severity order and
+verified live. Three commits to `main`: `ab97e88` (security), `9dda97a` (Fly
+cost), `cd706bb` (lint), `7cd0c91` (CI actions). D1 migration `0004` applied to
+remote; engine redeployed to Fly; CI + deploy both green.
+
+- **Tenant isolation (high).** Auth was enforced but authorization wasn't — any
+  signed-in user could read/modify any case by id (IDOR on patient genomic data).
+  Added `cases.owner_id` (migration [`0004_case_owner.sql`](infra/migrations/0004_case_owner.sql), applied `--remote`) + a `caseAccessGate` on `/cases/:id[/*]` in [`routes/api.ts`](app/api/src/routes/api.ts) that 404s non-owners and claims legacy NULL-owner rows on first touch. `GET /cases`/`cleanup` owner-scoped; orphan scan dev-only. See *Auth* above.
+- **Case-API consolidation (high/med).** The old `/cases`, `/variants`, `/proposals` routers were an unreachable, unsecured second surface (SPA only ever calls `/api/*`) whose `/run` set status `queued` but never dispatched. Unmounted them in [`index.ts`](app/api/src/index.ts); stub `/run`/`/report` now 501. `/api/*` (owner-scoped) is canonical.
+- **Other review fixes.** CORS `*` → `ALLOWED_ORIGINS` allowlist; variants list filter pushed into SQL (was filtering *after* `LIMIT 500`, silently dropping matches); engine bearer compare → `hmac.compare_digest` (constant-time); BA1 reclass evidence item carries `points_for("BA")` so `reclass_points`/`delta` reflect the benign override.
+- **Fly scale-to-zero (cost).** Idle `shared-cpu-4x/8 GB` at `min_machines_running=1` was billing ~$57/mo. Now a **self-stopping worker**: [`container_server.py`](tracks/container_server.py) tracks in-flight jobs and stops the machine via the Fly Machines API once idle (`_self_stop_if_idle`, gated on no other job + startup grace); [`fly.toml`](fly.toml) set to `min=0` / `auto_stop="off"` / `auto_start=true` and downsized to `shared-cpu-2x/4 GB`. Requires `FLY_API_TOKEN` secret (set on the app). Pay only for run-seconds. Added root [`.dockerignore`](.dockerignore) (build context 398 MB → a few MB).
+- **CI green.** Cleared 44 pre-existing `ruff` violations blocking the engine job's pytest (dead vars in `sv_pipeline.py`, unused import in `test_cnv.py`, 40 semicolons in `test_bam_calling.py`), and bumped GitHub Actions to Node-24 majors (`checkout@v5`, `setup-node@v5`, `setup-python@v6`). All three CI jobs pass; deploy pipeline green.
+
+### 2026-06-02 — Roadmap sweep: PS1/PM5, rate limiting, LLM HPO, server-side report
 
 Four road-ahead items closed (GenomeAsia stays blocked — no data access yet).
 Merged to `main` (`bf121b0`), plus a follow-up Server-PDF button + Report

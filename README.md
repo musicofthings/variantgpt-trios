@@ -81,10 +81,11 @@ npm run dev          # → http://localhost:5173 (uses Vite dev API middleware)
 ### Engine (Python)
 ```
 cd engine
-python -m venv .venv && .venv\Scripts\activate
+python -m venv .venv
+source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -e .[dev]
 variantgpt-engine --help
-pytest
+ruff check src tests && pytest   # what CI runs
 ```
 
 ### Edge API (Workers)
