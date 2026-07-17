@@ -39,6 +39,12 @@ export type Bindings = {
   CLERK_ISSUER?: string;
   CLERK_AUDIENCE?: string;
 
+  /** CORS allowlist — comma-separated exact origins permitted to call the API
+   *  from a browser (e.g. "https://variantgpt.pages.dev,https://app.example.com").
+   *  When unset (local dev) the Worker reflects the request origin. Never a
+   *  wildcard in production. */
+  ALLOWED_ORIGINS?: string;
+
   /** Cloudflare native Rate Limiting binding (open beta), declared in
    *  wrangler.toml. Buckets /api/* requests per Clerk user (IP fallback).
    *  Optional: when absent the rate-limit middleware is a pass-through. */

@@ -1,3 +1,7 @@
+// ⚠️  UNMOUNTED — not wired into index.ts. This holds the curator reclass-
+// decision flow (PRD §4.10) but is unreachable until the curator UI is built.
+// Before re-mounting, add owner scoping (see caseAccessGate in routes/api.ts):
+// a decision must only be recordable by the owner of the proposal's case.
 import { Hono } from "hono";
 import { z } from "zod";
 import type { Bindings, Variables } from "../bindings";

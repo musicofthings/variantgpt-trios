@@ -1,3 +1,6 @@
+// ⚠️  UNMOUNTED — not wired into index.ts. Future curator-UI surface; queries
+// D1 variant tables the current pipeline doesn't populate and has no ownership
+// checks. Add owner scoping (see caseAccessGate in routes/api.ts) before use.
 import { Hono } from "hono";
 import type { Bindings, Variables } from "../bindings";
 

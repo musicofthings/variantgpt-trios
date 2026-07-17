@@ -30,6 +30,62 @@ function sanitize(id: string): string | null {
   return SAFE_ID.test(id) ? id : null;
 }
 
+// ───────────────────────── tenant isolation ─────────────────────────
+//
+// Auth (clerkAuthGated, upstream in index.ts) proves *who* the caller is and
+// sets c.get("userId"); it does NOT prove the caller may touch a given case.
+// caseAccessGate closes that gap for every /cases/:id[...] route:
+//
+//   - case row owned by someone else            → 403
+//   - case row with NULL owner (legacy/pre-auth) → claimed for this caller
+//   - case row missing                           → allowed through; the handler
+//     that lazily creates it stamps owner_id (see ensureCaseRow)
+//
+// In dev mode CLERK_ISSUER is unset, so userId is the constant
+// 'dev-unauthenticated' and every row resolves to the same owner — single
+// tenant, no 403s. Mount order matters: this runs AFTER the global auth gate.
+
+/** Upsert the case row, stamping owner_id on first creation. Replaces the bare
+ *  `INSERT INTO cases ... ON CONFLICT DO NOTHING` at every lazy-create site so
+ *  the creator becomes the owner. */
+async function ensureCaseRow(
+  c: import("hono").Context<{ Bindings: Bindings; Variables: Variables }>,
+  id: string,
+  name: string,
+): Promise<void> {
+  await c.env.DB.prepare(
+    `INSERT INTO cases (id, name, status, owner_id) VALUES (?, ?, 'draft', ?)
+     ON CONFLICT(id) DO NOTHING`,
+  ).bind(id, name, c.get("userId")).run();
+}
+
+/** Hono middleware: enforce case ownership for /cases/:id routes. */
+const caseAccessGate: import("hono").MiddlewareHandler<{ Bindings: Bindings; Variables: Variables }> = async (c, next) => {
+  const id = sanitize(c.req.param("id") ?? "");
+  // No/invalid :id (e.g. /cases/cleanup, which has no owned case) — let the
+  // handler validate and answer.
+  if (!id) return next();
+  const userId = c.get("userId");
+  const row = await c.env.DB.prepare(
+    `SELECT owner_id FROM cases WHERE id = ?`,
+  ).bind(id).first<{ owner_id: string | null }>();
+  if (row) {
+    if (row.owner_id == null) {
+      // Legacy/unclaimed case — adopt it for the first caller so the hole
+      // closes after one touch instead of staying open forever.
+      await c.env.DB.prepare(
+        `UPDATE cases SET owner_id = ? WHERE id = ? AND owner_id IS NULL`,
+      ).bind(userId, id).run();
+    } else if (row.owner_id !== userId) {
+      return c.json({ error: "not_found" }, 404); // 404 not 403 — don't confirm the id exists
+    }
+  }
+  return next();
+};
+
+apiRouter.use("/cases/:id", caseAccessGate);
+apiRouter.use("/cases/:id/*", caseAccessGate);
+
 /** R2 object key for an uploaded blob. FASTQ encodes the mate so R1/R2 don't
  *  collide: cases/<id>/uploads/<role>.R1.fastq.gz */
 function uploadKey(id: string, role: string, mate: string, ext: string): string {
@@ -180,10 +236,7 @@ apiRouter.get("/cases/:id/upload-url/:role", async (c) => {
 
   // The case row MUST exist before the uploads row — uploads.case_id has a
   // FOREIGN KEY into cases(id). Order matters; don't reorder these.
-  await c.env.DB.prepare(
-    `INSERT INTO cases (id, name, status) VALUES (?, ?, 'draft')
-     ON CONFLICT(id) DO NOTHING`,
-  ).bind(id, `Case ${id}`).run();
+  await ensureCaseRow(c, id, `Case ${id}`);
   await c.env.DB.prepare(
     `INSERT INTO uploads (case_id, role, mate, r2_key, filename, uploaded_at)
      VALUES (?, ?, ?, ?, ?, ?)
@@ -291,9 +344,7 @@ apiRouter.post("/cases/:id/uploads/:role/multipart", async (c) => {
   }
 
   // Ensure the cases row exists (uploads.case_id FK) before we record anything.
-  await c.env.DB.prepare(
-    `INSERT INTO cases (id, name, status) VALUES (?, ?, 'draft') ON CONFLICT(id) DO NOTHING`,
-  ).bind(id, `Case ${id}`).run();
+  await ensureCaseRow(c, id, `Case ${id}`);
 
   return c.json({ uploadId, key, partSize: MULTIPART_PART_SIZE, role, mate, filename: filename ?? null });
 });
@@ -462,9 +513,7 @@ apiRouter.post("/cases/:id/data-assign", async (c) => {
     return c.json({ error: "no assignments" }, 400);
   }
 
-  await c.env.DB.prepare(
-    `INSERT INTO cases (id, name, status) VALUES (?, ?, 'draft') ON CONFLICT(id) DO NOTHING`,
-  ).bind(id, `Case ${id}`).run();
+  await ensureCaseRow(c, id, `Case ${id}`);
 
   let assigned = 0;
   for (const a of body.assignments) {
@@ -1041,7 +1090,9 @@ apiRouter.all("/cases/:id/report", async (c) => {
  * → list cases visible to this account (active + history).
  */
 apiRouter.get("/cases", async (c) => {
-  // Join jobs + uploads + cases. Keep it simple — caller paginates client-side.
+  const userId = c.get("userId");
+  // Only the caller's cases. Legacy NULL-owner rows remain visible until an
+  // owner claims them via caseAccessGate (opening any of them stamps ownership).
   const rows = await c.env.DB.prepare(
     `SELECT
        c.id AS caseId,
@@ -1053,9 +1104,10 @@ apiRouter.get("/cases", async (c) => {
        j.manifest_json AS manifest_json
      FROM cases c
      LEFT JOIN jobs j ON j.case_id = c.id
+     WHERE c.owner_id = ? OR c.owner_id IS NULL
      ORDER BY COALESCE(j.started_at, 0) DESC
      LIMIT 200`,
-  ).all<{
+  ).bind(userId).all<{
     caseId: string;
     status: string;
     startedAt: number | null;
@@ -1092,9 +1144,14 @@ apiRouter.get("/cases", async (c) => {
   // Also surface R2-only orphans: cases whose VCFs are still in R2 but whose
   // D1 row was deleted (e.g. a Delete that didn't purge R2, or a manual D1
   // wipe). These are recoverable — the user can either delete the R2 objects
-  // or rebuild the case row from them.
+  // or rebuild the case row from them. Orphans have no D1 row and therefore no
+  // owner, so we CANNOT attribute them to a user — listing them for everyone
+  // would re-leak case ids across tenants. Only expose orphans in single-tenant
+  // dev mode; in an authed deployment a wiped case must be recovered by id.
   const knownIds = new Set(cases.map((c) => c.caseId));
+  const singleTenant = userId === "dev-unauthenticated";
   try {
+    if (singleTenant) {
     let cursor: string | undefined;
     const orphanFiles: Record<string, string[]> = {};
     do {
@@ -1128,6 +1185,7 @@ apiRouter.get("/cases", async (c) => {
         hasResult,
         orphan: true,
       });
+    }
     }
   } catch (e) {
     // R2 scan is best-effort; never let it block the cases endpoint.
@@ -1211,11 +1269,10 @@ apiRouter.post("/cases/:id/recover", async (c) => {
     return c.json({ error: "no valid role files found (expected proband/father/mother)" }, 400);
   }
 
-  // Rebuild the cases row (idempotent).
-  await c.env.DB.prepare(
-    `INSERT INTO cases (id, name, status) VALUES (?, ?, 'draft')
-     ON CONFLICT(id) DO NOTHING`,
-  ).bind(id, `Recovered ${id}`).run();
+  // Rebuild the cases row (idempotent). The gate already 403'd anyone who
+  // isn't the owner of a still-existing row; a fully-wiped row is reclaimed by
+  // whoever recovers it.
+  await ensureCaseRow(c, id, `Recovered ${id}`);
   // Rebuild the uploads rows (PK is (case_id, role, mate) since migration 0003).
   for (const r of roles) {
     await c.env.DB.prepare(
@@ -1244,17 +1301,22 @@ apiRouter.post("/cases/:id/recover", async (c) => {
  * Returns { deleted: [<caseId>...], r2Purged: N }.
  */
 apiRouter.post("/cases/cleanup", async (c) => {
+  const userId = c.get("userId");
   let body: { olderThanMinutes?: number } = {};
   try { body = await c.req.json(); } catch { /* empty body is fine */ }
   const olderThanMs = (body.olderThanMinutes ?? 30) * 60 * 1000;
   const cutoff = Date.now() - olderThanMs;
 
+  // Only sweep the caller's own stuck/failed runs — never other tenants'.
+  // (This route has no :id, so caseAccessGate doesn't cover it.)
   const rows = await c.env.DB.prepare(
-    `SELECT case_id FROM jobs
-       WHERE status = 'error'
-          OR (status = 'running' AND COALESCE(started_at, 0) < ?)
-          OR (status = 'queued'  AND COALESCE(started_at, 0) < ?)`,
-  ).bind(cutoff, cutoff).all<{ case_id: string }>();
+    `SELECT j.case_id AS case_id FROM jobs j
+       JOIN cases c ON c.id = j.case_id
+      WHERE (c.owner_id = ? OR c.owner_id IS NULL)
+        AND (j.status = 'error'
+          OR (j.status = 'running' AND COALESCE(j.started_at, 0) < ?)
+          OR (j.status = 'queued'  AND COALESCE(j.started_at, 0) < ?))`,
+  ).bind(userId, cutoff, cutoff).all<{ case_id: string }>();
 
   const deleted: string[] = [];
   let r2Purged = 0;

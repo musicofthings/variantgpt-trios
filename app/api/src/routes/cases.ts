@@ -1,3 +1,12 @@
+// ⚠️  UNMOUNTED — NOT reachable in production. See app/api/src/index.ts.
+//
+// This was a second, RESTful case API intended for a future curator UI. It is
+// NOT wired into the app: the SPA talks exclusively to /api/* (routes/api.ts),
+// which is the canonical, ownership-enforced surface. Kept for reference when
+// the curator UI is built. Before re-mounting, this router MUST:
+//   1. enforce case ownership (port caseAccessGate from routes/api.ts), and
+//   2. stop duplicating case/run/report logic that already lives in api.ts.
+// Do not re-export into index.ts until both are done.
 import { Hono } from "hono";
 import { z } from "zod";
 import type { Bindings, Variables } from "../bindings";
@@ -94,14 +103,14 @@ casesRouter.post("/:id/clinical", async (c) => {
   return c.json({ saved: true, hpo_candidates: candidates });
 });
 
-// POST /cases/:id/run — enqueue engine job. Engine pulls VCFs from R2 and
-// writes case.json back via the webhook (signed with ENGINE_WEBHOOK_SECRET).
-casesRouter.post("/:id/run", async (c) => {
-  const caseId = c.req.param("id");
-  await c.env.DB.prepare("UPDATE cases SET status = 'queued' WHERE id = ?").bind(caseId).run();
-  // TODO: post a job message to a queue (Cloudflare Queues / external task runner).
-  return c.json({ case_id: caseId, status: "queued" }, 202);
-});
+// POST /cases/:id/run — NOT IMPLEMENTED on this router. The real dispatch lives
+// at POST /api/cases/:id/run (routes/api.ts::kickEngineRun), which signs R2
+// URLs and invokes the Fly engine. The previous version here set status to
+// 'queued' but never enqueued anything, leaving cases stuck forever — worse
+// than a clear error. Return 501 so a caller can't mistake it for a real run.
+casesRouter.post("/:id/run", (c) =>
+  c.json({ error: "not_implemented", use: "POST /api/cases/:id/run" }, 501),
+);
 
 // GET /cases/:id/variants — prioritized variant list with filters.
 casesRouter.get("/:id/variants", async (c) => {
@@ -110,31 +119,31 @@ casesRouter.get("/:id/variants", async (c) => {
   const tier = c.req.query("tier");
   const gene = c.req.query("gene");
 
+  // Every filter — including inheritance_model — must be applied BEFORE the
+  // LIMIT, or the cap silently drops matching variants that ranked outside the
+  // global top-500. inheritance_models_json is a JSON array of enum strings, so
+  // a LIKE on the quoted token is an exact membership test (models never
+  // substring one another: "AR" vs "AR_hom" would need word boundaries, but the
+  // stored tokens are full enum values, so we match the quoted form).
   let sql =
     "SELECT * FROM variants WHERE case_id = ?" +
     (tier ? " AND (baseline_tier = ? OR reclass_tier = ?)" : "") +
     (gene ? " AND gene = ?" : "") +
+    (inheritance ? " AND inheritance_models_json LIKE ?" : "") +
     " ORDER BY priority_score DESC LIMIT 500";
   const binds: unknown[] = [caseId];
   if (tier) { binds.push(tier, tier); }
   if (gene) { binds.push(gene); }
+  if (inheritance) { binds.push(`%"${inheritance}"%`); }
 
   const rows = await c.env.DB.prepare(sql).bind(...binds).all();
-
-  // inheritance_model filter is JSON-stored; filter in memory.
-  let variants = rows.results ?? [];
-  if (inheritance) {
-    variants = variants.filter((v: any) =>
-      (v.inheritance_models_json || "").includes(inheritance)
-    );
-  }
-  return c.json({ variants });
+  return c.json({ variants: rows.results ?? [] });
 });
 
-// POST /cases/:id/report — generate PDF/JSON/TSV, return presigned URL.
-casesRouter.post("/:id/report", async (c) => {
-  const caseId = c.req.param("id");
-  const key = `cases/${caseId}/reports/${Date.now()}.pdf`;
-  // Report rendering runs off-edge (engine) or via a Cloudflare-compatible PDF lib.
-  return c.json({ case_id: caseId, report_key: key, status: "queued" });
-});
+// POST /cases/:id/report — NOT IMPLEMENTED here. The real report renderer is
+// GET|POST /api/cases/:id/report (routes/api.ts), which builds a self-contained
+// HTML/PDF from case.json. The previous stub returned a report_key for a file
+// it never wrote.
+casesRouter.post("/:id/report", (c) =>
+  c.json({ error: "not_implemented", use: "GET /api/cases/:id/report" }, 501),
+);

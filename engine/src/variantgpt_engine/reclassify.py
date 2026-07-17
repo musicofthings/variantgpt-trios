@@ -95,7 +95,7 @@ def reclassify(
         if not ba1_fired and (pop.af or 0) > t.ba1:
             ba1_fired = True
             new_ledger.append(EvidenceItem(
-                criterion="BA1", fired=True, strength="BA",
+                criterion="BA1", fired=True, strength="BA", points=points_for("BA"),
                 source=pop.source,
                 detail=f"AF={pop.af:.4f} > BA1 {t.ba1} ({t.source}, South Asian baseline)",
             ))

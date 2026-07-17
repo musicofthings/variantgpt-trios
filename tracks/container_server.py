@@ -96,7 +96,11 @@ def _check_bearer(request: Request) -> JSONResponse | None:
         print("[warn] ENGINE_BEARER unset; engine is open. Set it via `fly secrets set`.", flush=True)
         return None
     auth = request.headers.get("authorization", "")
-    if not auth.startswith("Bearer ") or auth.removeprefix("Bearer ") != expected:
+    if not auth.startswith("Bearer "):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    # Constant-time compare so a timing side-channel can't leak the shared bearer
+    # byte-by-byte (mirrors the Worker's timingSafeEq on the callback HMAC).
+    if not hmac.compare_digest(auth.removeprefix("Bearer "), expected):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     return None
 
