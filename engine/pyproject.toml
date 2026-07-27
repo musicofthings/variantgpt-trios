@@ -29,7 +29,7 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
-    "ruff>=0.4",
+    "ruff==0.15.22",
     "mypy>=1.10",
 ]
 
@@ -42,6 +42,16 @@ where = ["src"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+# Explicit rule selection — CI has, without warning, gone from "ruff check
+# passes" to "308 findings" purely from an unpinned ruff release bumping its
+# own default rule set (ruff==0.16.0 enables ~400 rules by default vs.
+# 0.15.22's E4/E7/E9/F, with no source change at all). Pinning ruff (above)
+# fixes today's break; this pins the *intent* so the next ruff release can't
+# silently do the same thing again — CI now depends on an explicit list, not
+# on whatever a given ruff version happens to default to.
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
