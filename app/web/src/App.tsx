@@ -1,4 +1,4 @@
-import { Navigate, NavLink, Route, Routes } from "react-router-dom";
+import { Navigate, NavLink, Route, Routes, useLocation } from "react-router-dom";
 import { Home } from "./pages/Home";
 import { Dashboard } from "./pages/Dashboard";
 import { NewCase } from "./pages/NewCase";
@@ -8,9 +8,21 @@ import { Workbench } from "./pages/Workbench";
 import { AnalysisWorkbench } from "./pages/AnalysisWorkbench";
 import { Report } from "./pages/Report";
 import { Diff } from "./pages/Diff";
+import { Landing } from "./pages/Landing";
 import { AuthGate, UserChip } from "./auth";
 
 export function App() {
+  // "/welcome" is public — checked ahead of AuthGate so it never requires
+  // sign-in, regardless of Clerk config. Plain pathname check (not a nested
+  // <Routes>) to avoid RR v6 descendant-route path ambiguity.
+  const location = useLocation();
+  if (location.pathname === "/welcome") {
+    return <Landing />;
+  }
+  return <AuthedApp />;
+}
+
+function AuthedApp() {
   return (
     <AuthGate>
       <div className="app">
