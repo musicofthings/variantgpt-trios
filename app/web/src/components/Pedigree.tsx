@@ -26,6 +26,12 @@ export function Pedigree({
   const proband = state.members.find((m) => m.role === "proband");
   const sibs = state.members.filter((m) => m.role === "sibling");
   const selected = state.members.find((m) => m.id === selectedId) ?? null;
+  // A strict sibling-based duo: proband + exactly one sibling, no parent at
+  // all. In this shape, "+ Add father"/"+ Add mother" would silently grow it
+  // to an unintended 3-member proband+sibling+parent pedigree instead of
+  // swapping the sibling back out — so those two get hidden here in favor of
+  // explicit swap buttons that keep it a clean duo either way.
+  const isSiblingDuo = !father && !mother && sibs.length === 1 && state.members.length === 2;
 
   function onNodeClick(m: PedMember) {
     setSelectedId(m.id);
@@ -108,12 +114,12 @@ export function Pedigree({
         >
           {state.consanguineous ? "Consanguineous ✓" : "Mark consanguinity"}
         </button>
-        {!father ? (
+        {!father && !isSiblingDuo ? (
           <button onClick={() => onChange({ ...state, members: [...state.members, { id: "father", role: "father", sex: "male", affected: false, sample_name: "" }] })}>
             + Add father
           </button>
         ) : null}
-        {!mother ? (
+        {!mother && !isSiblingDuo ? (
           <button onClick={() => onChange({ ...state, members: [...state.members, { id: "mother", role: "mother", sex: "female", affected: false, sample_name: "" }] })}>
             + Add mother
           </button>
@@ -156,9 +162,13 @@ export function Pedigree({
            all) is a distinct shape from the parent-based duo above — neither
            PS2 nor PM6 (de novo) apply without any parent present, but a
            shared candidate with an affected sib, or a healthy sib ruling out
-           a recessive candidate, both still work (inheritance.py). One click
-           each way between the two duo shapes, same pattern as the
-           father/mother swap. */}
+           a recessive candidate, both still work (inheritance.py). Swapping
+           back to a parent-based duo (below, isSiblingDuo) offers both
+           father and mother explicitly, and hides the generic "+ Add
+           father"/"+ Add mother" buttons while a sibling occupies the duo's
+           second slot — otherwise those would silently grow the pedigree to
+           an unintended 3-member proband+sibling+parent shape instead of
+           swapping the sibling out. */}
         {(father || mother) && sibs.length === 0 && state.members.length === 2 ? (
           <button
             title="Switch this duo from proband + parent to proband + sibling (no parent sequenced)"
@@ -174,9 +184,24 @@ export function Pedigree({
             ⇄ Use sibling instead
           </button>
         ) : null}
-        {!father && !mother && sibs.length === 1 && state.members.length === 2 ? (
+        {isSiblingDuo ? (
           <button
-            title="Switch this duo from proband + sibling to proband + parent (mother)"
+            title="Switch this duo from proband + sibling to proband + father"
+            onClick={() => onChange({
+              ...state,
+              members: state.members.map((m) =>
+                m.role === "sibling"
+                  ? { id: "father", role: "father", sex: "male", affected: false, sample_name: "" }
+                  : m
+              ),
+            })}
+          >
+            ⇄ Use father instead
+          </button>
+        ) : null}
+        {isSiblingDuo ? (
+          <button
+            title="Switch this duo from proband + sibling to proband + mother"
             onClick={() => onChange({
               ...state,
               members: state.members.map((m) =>
@@ -186,7 +211,7 @@ export function Pedigree({
               ),
             })}
           >
-            ⇄ Use parent instead
+            ⇄ Use mother instead
           </button>
         ) : null}
         <button
