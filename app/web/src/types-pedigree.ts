@@ -39,8 +39,10 @@ export const DEFAULT_SINGLETON: PedigreeState = {
   ],
 };
 
-/** Duo — proband + one parent. Default to mother present + father missing;
- *  the user can flip which parent via the pedigree UI. */
+/** Duo — proband + one parent. Defaults to mother present; the pedigree
+ *  builder's "⇄ Use father instead" button (Pedigree.tsx) swaps to father
+ *  in one click — the engine's de-novo logic treats either parent
+ *  symmetrically (inheritance.py), so this is a UI-only choice. */
 export const DEFAULT_DUO: PedigreeState = {
   consanguineous: false,
   members: [

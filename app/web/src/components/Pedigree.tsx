@@ -116,6 +116,39 @@ export function Pedigree({
             + Add mother
           </button>
         ) : null}
+        {/* Duo shape (exactly one parent present) — one click to use the other
+           parent instead, rather than remove + re-add. Both id and role flip
+           together: the engine re-derives role from the PED individual-id
+           string (pedigree.py's _infer_role), so id="mother" must match
+           role="mother" or the swap silently reverts server-side. Swapping
+           after a VCF is already staged for this member leaves that staged
+           file under the old id — re-drop it under the new label. */}
+        {father && !mother ? (
+          <button
+            title="Switch the present parent from father to mother"
+            onClick={() => onChange({
+              ...state,
+              members: state.members.map((m) =>
+                m.id === "father" ? { ...m, id: "mother", role: "mother", sex: "female" } : m
+              ),
+            })}
+          >
+            ⇄ Use mother instead
+          </button>
+        ) : null}
+        {mother && !father ? (
+          <button
+            title="Switch the present parent from mother to father"
+            onClick={() => onChange({
+              ...state,
+              members: state.members.map((m) =>
+                m.id === "mother" ? { ...m, id: "father", role: "father", sex: "male" } : m
+              ),
+            })}
+          >
+            ⇄ Use father instead
+          </button>
+        ) : null}
         <button
           onClick={() => onChange({
             ...state,

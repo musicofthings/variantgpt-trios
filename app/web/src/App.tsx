@@ -9,6 +9,7 @@ import { AnalysisWorkbench } from "./pages/AnalysisWorkbench";
 import { Report } from "./pages/Report";
 import { Diff } from "./pages/Diff";
 import { Landing } from "./pages/Landing";
+import { Tracks } from "./pages/Tracks";
 import { AuthGate, UserChip } from "./auth";
 
 export function App() {
@@ -54,7 +55,7 @@ function AuthedApp() {
             <Route path="/cases/:caseId/analysis" element={<AnalysisWorkbench />} />
             <Route path="/cases/:caseId/report" element={<Report />} />
             <Route path="/cases/:caseId/diff" element={<Diff />} />
-            <Route path="/tracks" element={<TracksStub />} />
+            <Route path="/tracks" element={<Tracks />} />
             {/* Catch-all: any unmatched path (e.g. a Clerk SSO callback route,
                 a stale bookmark, or a hard refresh on an unknown URL) lands on
                 Home instead of rendering a blank <main>. */}
@@ -63,14 +64,5 @@ function AuthedApp() {
         </main>
       </div>
     </AuthGate>
-  );
-}
-
-function TracksStub() {
-  return (
-    <>
-      <div className="topbar"><h1>Tracks &amp; Settings</h1></div>
-      <div className="card">Population tracks (IndiGenomes, GenomeAsia, GenomeIndia), predictor versions, ACMG threshold overrides.</div>
-    </>
   );
 }
