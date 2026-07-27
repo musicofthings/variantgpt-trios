@@ -14,9 +14,13 @@ import { AuthGate, UserChip } from "./auth";
 export function App() {
   // "/welcome" is public — checked ahead of AuthGate so it never requires
   // sign-in, regardless of Clerk config. Plain pathname check (not a nested
-  // <Routes>) to avoid RR v6 descendant-route path ambiguity.
+  // <Routes>) to avoid RR v6 descendant-route path ambiguity. Strip a
+  // trailing slash first — "/welcome/" (a trailing-slash bookmark, or a
+  // browser/CDN normalizing the URL) must still match, or it falls through
+  // to AuthedApp and Clerk redirects to its hosted sign-in instead.
   const location = useLocation();
-  if (location.pathname === "/welcome") {
+  const path = location.pathname.length > 1 ? location.pathname.replace(/\/+$/, "") : location.pathname;
+  if (path === "/welcome") {
     return <Landing />;
   }
   return <AuthedApp />;
