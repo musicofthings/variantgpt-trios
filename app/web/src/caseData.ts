@@ -424,21 +424,27 @@ export function adaptCase(engine: EngineCase): {
 }
 
 /** Infer pipeline mode from the case.json pedigree. We compare the SET of
- *  member roles present (NOT counts — a "sibling" alone is still effectively
- *  a singleton from an inheritance-reasoning standpoint).
- *  - singleton: proband only (or proband + non-parent members)
- *  - duo:       proband + exactly one parent (father OR mother)
+ *  member roles present.
+ *  - singleton: proband only, no other member with genotype data
+ *  - duo:       proband + exactly one parent (father OR mother), OR
+ *               proband + one sibling with no parent sequenced at all —
+ *               a distinct duo shape (inheritance.py: no PS2/PM6 de novo,
+ *               but a shared candidate with an affected sib, or a healthy
+ *               sib ruling out a recessive candidate, both apply)
  *  - trio:      proband + both parents
  *  - extended:  trio + siblings / other relatives
  */
 function inferPipelineMode(engine: EngineCase): "singleton" | "duo" | "trio" | "extended" {
-  const roles = new Set((engine.pedigree?.members ?? []).map((m) => m.role));
+  const members = engine.pedigree?.members ?? [];
+  const roles = new Set(members.map((m) => m.role));
   const hasFather = roles.has("father");
   const hasMother = roles.has("mother");
   const parents = (hasFather ? 1 : 0) + (hasMother ? 1 : 0);
   if (parents === 2 && roles.size > 3) return "extended";
   if (parents === 2) return "trio";
   if (parents === 1) return "duo";
+  const siblingCount = members.filter((m) => m.role === "sibling").length;
+  if (siblingCount >= 1) return "duo"; // sibling-based duo: no parent sequenced at all
   return "singleton";
 }
 

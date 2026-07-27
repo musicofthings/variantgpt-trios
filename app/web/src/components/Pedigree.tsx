@@ -9,7 +9,9 @@ import type { PedigreeState, PedMember } from "../types-pedigree";
  * Interactions:
  *   - click       → toggle affected
  *   - selected member's chips below the pedigree → set sex, toggle no-sample
- *   - "Mark consanguinity" / "+ Add sibling" → bottom toolbar */
+ *   - "Mark consanguinity" / "+ Add sibling" / "⇄ Use sibling instead"
+ *     (proband + parent ⇄ proband + sibling, i.e. sibling-based duo with no
+ *     parent sequenced) → bottom toolbar */
 export function Pedigree({
   state,
   onChange,
@@ -118,11 +120,12 @@ export function Pedigree({
         ) : null}
         {/* Duo shape (exactly one parent present) — one click to use the other
            parent instead, rather than remove + re-add. Both id and role flip
-           together: the engine re-derives role from the PED individual-id
-           string (pedigree.py's _infer_role), so id="mother" must match
-           role="mother" or the swap silently reverts server-side. Swapping
-           after a VCF is already staged for this member leaves that staged
-           file under the old id — re-drop it under the new label. */}
+           together: the engine's PED writer (tracks/run_uploaded_case.py
+           _build_ped) emits role explicitly from this field now, so the id
+           itself no longer has to encode it — but keep id and role in sync
+           anyway for readability. Swapping after a VCF is already staged for
+           this member leaves that staged file under the old id — re-drop it
+           under the new label. */}
         {father && !mother ? (
           <button
             title="Switch the present parent from father to mother"
@@ -147,6 +150,43 @@ export function Pedigree({
             })}
           >
             ⇄ Use father instead
+          </button>
+        ) : null}
+        {/* Sibling-based duo (proband + one sibling, no parent sequenced at
+           all) is a distinct shape from the parent-based duo above — neither
+           PS2 nor PM6 (de novo) apply without any parent present, but a
+           shared candidate with an affected sib, or a healthy sib ruling out
+           a recessive candidate, both still work (inheritance.py). One click
+           each way between the two duo shapes, same pattern as the
+           father/mother swap. */}
+        {(father || mother) && sibs.length === 0 && state.members.length === 2 ? (
+          <button
+            title="Switch this duo from proband + parent to proband + sibling (no parent sequenced)"
+            onClick={() => onChange({
+              ...state,
+              members: state.members.map((m) =>
+                m.role === "father" || m.role === "mother"
+                  ? { id: "sibling", role: "sibling", sex: "unknown", affected: false, sample_name: "" }
+                  : m
+              ),
+            })}
+          >
+            ⇄ Use sibling instead
+          </button>
+        ) : null}
+        {!father && !mother && sibs.length === 1 && state.members.length === 2 ? (
+          <button
+            title="Switch this duo from proband + sibling to proband + parent (mother)"
+            onClick={() => onChange({
+              ...state,
+              members: state.members.map((m) =>
+                m.role === "sibling"
+                  ? { id: "mother", role: "mother", sex: "female", affected: false, sample_name: "" }
+                  : m
+              ),
+            })}
+          >
+            ⇄ Use parent instead
           </button>
         ) : null}
         <button

@@ -1198,10 +1198,14 @@ function PipelineModeBanner({ mode, roles }: {
   const hasFather = roles.includes("father");
   const hasMother = roles.includes("mother");
   const presentParent = hasFather ? "father" : hasMother ? "mother" : null;
+  // A duo can also be proband + one sibling with no parent sequenced at all
+  // (inheritance.py's sibling-based duo path) — distinct limits from the
+  // parent-based duo below, since no parent means no de novo evidence at all.
+  const isSiblingDuo = mode === "duo" && !presentParent && roles.includes("sibling");
 
   const label =
     mode === "singleton" ? "Singleton mode"
-    : mode === "duo" ? `Duo mode · proband + ${presentParent}`
+    : mode === "duo" ? (isSiblingDuo ? "Duo mode · proband + sibling" : `Duo mode · proband + ${presentParent}`)
     : "Extended pedigree";
 
   const limits: { title: string; detail: string }[] = [];
@@ -1217,6 +1221,15 @@ function PipelineModeBanner({ mode, roles }: {
     limits.push({
       title: "Het inherited cannot be sourced",
       detail: "Without parents we cannot distinguish inherited hets from de novo singletons; all hets are reported as candidates.",
+    });
+  } else if (mode === "duo" && isSiblingDuo) {
+    limits.push({
+      title: "De novo (PS2/PM6) unavailable",
+      detail: "No parent is sequenced at all, so there's no 0/0 baseline to claim de novo against — every candidate is reported as inherited/shared or unresolved.",
+    });
+    limits.push({
+      title: "Sibling segregation is genotype-only",
+      detail: "A shared candidate with an affected sibling is flagged (het inherited) but not trans-phased; a healthy sibling sharing a homozygous candidate downgrades its confidence rather than ruling it out outright — review before acting on it.",
     });
   } else if (mode === "duo") {
     limits.push({

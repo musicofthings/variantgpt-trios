@@ -22,6 +22,36 @@ De novo confidence gates (matches GATK Best Practices + ClinGen SVI WG):
 
 Compound het requires a *gene-aware* second pass with parental phasing; that
 runs in `compound_het_pass` after annotation has assigned a gene per variant.
+
+Sibling-based duo (proband + one sibling, no parent sequenced) has no parent
+genotypes to key off of, so none of the parent-keyed branches above can tag
+a candidate for it — without the block below it silently falls through to
+"unresolved". `_siblings_of` reads the "sib" relations `pedigree.py` now
+produces (either from a shared non-"0" parent pair, or an explicit `sib_of`
+link when no parent was sequenced at all) and adds two sibling-only signals:
+
+  - An affected sibling sharing a proband's het candidate (no parent data to
+    otherwise explain it) is tagged `het_inherited` at "medium" confidence —
+    the same catch-all bucket parent-based duo/trio uses for "real candidate,
+    inheritance path not fully resolved", rather than an ACMG claim.
+  - An *unaffected* sibling sharing the proband's AR-hom candidate genotype
+    contradicts full penetrance for that variant (a healthy full sib carrying
+    the same homozygous "fully penetrant" recessive allele) — the model is
+    still emitted (it's a real Mendelian pattern) but confidence drops to
+    "low" so a curator reviews it, mirroring the existing Mendelian-
+    inconsistent-hom downgrade below.
+
+This deliberately does NOT fire a new ACMG criterion (e.g. BS4) on the
+unaffected-sibling case: reduced penetrance is common enough in recessive
+disease that a single incidental unaffected homozygote isn't strong enough
+evidence on its own to invoke "lack of segregation" against pathogenicity —
+the same conservative reasoning `acmg/context.py::evaluate_pp1` already
+documents for why unaffected carriers don't count against PP1. The affected-
+sibling case already gets real ACMG credit for free: PP1 (co-segregation) is
+role-agnostic — it sums affected/unaffected members' zygosity straight from
+`pedigree.members` + `Variant.calls`, so once a sibling's `Role` round-trips
+correctly (fixed in `pedigree.py`) their segregation evidence is already
+counted there without any changes needed in this module.
 """
 from __future__ import annotations
 
@@ -112,6 +142,7 @@ def assign_models(
     members = {m.id: m for m in pedigree.members}
     affected = {mid for mid, m in members.items() if m.affected == Affected.affected}
     parents = _parents_of(pedigree)
+    siblings = _siblings_of(pedigree)
 
     models: list[InheritanceModel] = []
     confidence = "high"
@@ -157,6 +188,32 @@ def assign_models(
         if gt == 2:
             if (fa_gt in (1, None)) and (mo_gt in (1, None)):
                 models.append("ar_hom")
+                unaffected_hom_sibs = [
+                    s for s in siblings.get(proband_id, [])
+                    if variant.genotypes.get(s) == 2 and members[s].affected == Affected.unaffected
+                ]
+                if unaffected_hom_sibs:
+                    # A healthy full sib carrying the same homozygous genotype
+                    # argues against full penetrance for this variant — still a
+                    # real candidate, but flag it for curator review rather
+                    # than reporting it at the default "high" confidence.
+                    confidence = "low"
+
+        # Sibling-only duo (no parent sequenced at all): none of the
+        # parent-keyed branches above can explain a het candidate, so surface
+        # an affected sibling sharing the same genotype as the "real
+        # candidate, inheritance path unresolved" bucket instead of letting it
+        # fall through to "unresolved". Parent-based branches take priority —
+        # only runs when there's no parent data to key off of.
+        if gt == 1 and fa is None and mo is None:
+            affected_carrier_sibs = [
+                s for s in siblings.get(proband_id, [])
+                if (variant.genotypes.get(s) or 0) >= 1 and members[s].affected == Affected.affected
+            ]
+            if affected_carrier_sibs and "de_novo" not in models and "het_inherited" not in models:
+                models.append("het_inherited")
+                if confidence == "high":
+                    confidence = "medium"
 
         # AD inherited: het in affected; transmitted from an affected parent.
         if gt == 1:
@@ -253,3 +310,31 @@ def _parents_of(pedigree: Pedigree) -> dict[str, tuple[Optional[str], Optional[s
         if kind == "parent":
             p[child_id].append(parent_id)
     return {c: (lst[0] if len(lst) >= 1 else None, lst[1] if len(lst) >= 2 else None) for c, lst in p.items()}
+
+
+def _siblings_of(pedigree: Pedigree) -> dict[str, list[str]]:
+    """Map each member id to its full siblings' ids, from "sib" relations.
+
+    `pedigree.py::load_ped` produces a "sib" relation two ways: an explicit
+    `sib_of` link (sibling-based duo — no parent sequenced to imply it from),
+    or — for completeness, should relations ever be built by shared parentage
+    instead — two children of the same parent pair. The relation is treated
+    as undirected here since either endpoint may be the "reference" member."""
+    shared_parents: dict[str, list[str]] = defaultdict(list)
+    for child_id, (fa, mo) in _parents_of(pedigree).items():
+        if fa or mo:
+            shared_parents[(fa, mo)].append(child_id)  # type: ignore[index]
+
+    sibs: dict[str, set[str]] = defaultdict(set)
+    for children in shared_parents.values():
+        if len(children) < 2:
+            continue
+        for c in children:
+            sibs[c].update(x for x in children if x != c)
+
+    for a, b, kind in pedigree.relations:
+        if kind == "sib":
+            sibs[a].add(b)
+            sibs[b].add(a)
+
+    return {mid: sorted(s) for mid, s in sibs.items()}
