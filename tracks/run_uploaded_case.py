@@ -96,17 +96,26 @@ def main(case_id: str) -> int:
 
 
 def _build_ped(family_id: str, members: list[dict]) -> str:
-    """PED columns: family_id  iid  paternal_id  maternal_id  sex  phenotype.
+    """PED columns: family_id  iid  paternal_id  maternal_id  sex  phenotype  role  sib_of.
 
     Members marked `missing` (no VCF provided — PRD §4.1 duo support) are
     still emitted in the PED so the relationship graph is correct; the engine
     just won't have genotypes for them, which downgrades de novo / phasing
     confidence for the proband (handled in inheritance.py).
+
+    `role` (col 7) is written straight from the pedigree JSON's own `role`
+    field rather than left for `pedigree.py`'s `_infer_role` to re-derive from
+    the id string — that heuristic cannot tell a sibling apart from any other
+    relative once no parent is recorded (a sibling-based duo: proband + one
+    sibling, no parent sequenced). `sib_of` (col 8) links a `sibling` member to
+    the proband explicitly, since with no parent present there's no shared
+    pid/mid to imply the relationship from.
     """
     sex_map = {"male": "1", "female": "2", "unknown": "0"}
     aff_map = {True: "2", False: "1"}
     father = next((m for m in members if m["role"] == "father"), None)
     mother = next((m for m in members if m["role"] == "mother"), None)
+    proband = next((m for m in members if m["role"] == "proband"), None)
     rows: list[str] = []
     for m in members:
         if m["role"] in ("father", "mother"):
@@ -114,10 +123,13 @@ def _build_ped(family_id: str, members: list[dict]) -> str:
         else:
             pid = father["id"] if father else "0"
             mid = mother["id"] if mother else "0"
+        sib_of = proband["id"] if m["role"] == "sibling" and proband and proband["id"] != m["id"] else "0"
         rows.append("\t".join([
             family_id, m["id"], pid, mid,
             sex_map.get(m.get("sex", "unknown"), "0"),
             aff_map.get(bool(m.get("affected")), "0"),
+            m["role"],
+            sib_of,
         ]))
     return "\n".join(rows) + "\n"
 
