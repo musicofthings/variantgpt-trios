@@ -1,7 +1,7 @@
 # VariantGPT — Session Handover
 
-**Last updated:** 2026-07-17
-**Working tree:** `~/projects/variantgpt-trios` (git: `musicofthings/variantgpt-trios`, branch `main` — 2026-07-17 security + scale-to-zero + CI sweep, HEAD `7cd0c91`)
+**Last updated:** 2026-08-10
+**Working tree:** `~/projects/variantgpt-trios` (git: `musicofthings/variantgpt-trios`, branch `main` — 2026-08-10 sibling-duo + production-crash fix, HEAD `208e2c7`)
 **Specs:** [`VariantGPT_PRD_TRD.md`](VariantGPT_PRD_TRD.md) · [`VariantGPT_Frontend_Design_Spec.md`](VariantGPT_Frontend_Design_Spec.md)
 **Deploy:** [`infra/DEPLOY.md`](infra/DEPLOY.md)
 
@@ -170,7 +170,8 @@ Per-variant clinical narrative drafted by Anthropic Claude on demand:
 3. ~~**LLM HPO extraction**~~ — ✅ done (2026-06-02, [ai.ts](app/api/src/routes/ai.ts) `POST /api/ai/hpo-extract`). Two-stage: Claude extracts phenotype phrases → OLS4 grounds each to a real HP: id. SPA Intake "Suggest HPO terms from history" button. **AI synopsis drafting** already shipped 2026-05-29. PRD §6.7 closed.
 4. ~~**Server-side PDF generation**~~ — ✅ done (2026-06-02, [report.ts](app/api/src/report.ts), `GET|POST /api/cases/:id/report`). Self-contained server-rendered HTML (archival, no JS/auth to render); `?format=pdf` uses Cloudflare Browser Rendering REST when `BROWSER_RENDERING_TOKEN` is set, else 501→HTML. SPA Report "Archival HTML" button.
 5. ~~**Compound-het PM3 trans-partner ClinVar lookup**~~ — ✅ done (2026-05-29). ~~PS1 / PM5 (ClinVar-by-gene+codon index)~~ — ✅ done (2026-06-02, [clinvar_aa.py](engine/src/variantgpt_engine/annotation_sources/clinvar_aa.py) + [acmg/context.py](engine/src/variantgpt_engine/acmg/context.py)). Remaining ACMG gaps: **PS3** (needs a functional-evidence dataset — MaveDB / ClinGen functional), **PP2** (needs gene missense-constraint + mechanism data), **BS3 / BS4 / BP2**.
-6. **CNV/SV/mitochondrial heteroplasmy** — out of scope per PRD §1.
+6. **Unpinned dependency floors** (`engine/pyproject.toml` dev deps, `engine/Dockerfile` runtime deps) — `ruff` and `starlette` are now pinned exactly after each broke `main`/production respectively on 2026-08-10 with zero source changes (a version bump alone). `pydantic`, `httpx`, `requests`, `networkx`, `uvicorn` are all still `>=` floors and carry the same latent risk of a future rebuild silently breaking on an upstream release. Worth auditing/pinning proactively rather than waiting for the next one to hit production.
+7. **CNV/SV/mitochondrial heteroplasmy** — out of scope per PRD §1.
 
 ### Resolved this session (2026-05-28)
 - ✅ CI lint debt cleared (`ruff check src tests` clean)
@@ -217,7 +218,75 @@ The `VITE_API_BASE` is hardcoded in the workflow file itself.
 
 ## Session log
 
-### 2026-07-17 (latest) — Security review, tenant isolation, Fly scale-to-zero, CI green
+### 2026-08-10 (latest) — Sibling-duo pedigree, CI dependency drift, production crash fix, Fly cost audit
+
+Four PRs merged to `main`: `9e750bb`/`4525a89` (PR #1, sibling-duo pedigree),
+`36cdd1f` (PR #3, pedigree-builder swap-back bug), `689539e` (PR #4, production
+crash — the important one). Plus a same-day Fly.io cost investigation that
+turned up the crash but concluded with no further infra changes.
+
+- **Sibling-based duo pedigree** (proband + one sibling, no parent sequenced).
+  Previously silently mishandled: `pedigree.py`'s `_infer_role` derived role
+  from substring-matching the id string, so a sibling with no parent recorded
+  always round-tripped as `Role.relative`. PED loader now accepts explicit
+  `role`/`sib_of` trailing columns (written by `_build_ped` from the pedigree
+  JSON directly, backward-compatible with plain 6-column PED files);
+  `inheritance.py` gained a `_siblings_of` helper + two sibling-aware signals
+  in `assign_models` (affected-sibling shared-het → `het_inherited` instead of
+  `unresolved`; unaffected-sibling AR-hom match → confidence downgrade, not a
+  new ACMG criterion — PP1 already credits this role-agnostically once `Role`
+  round-trips). Frontend: `DEFAULT_SIBLING_DUO` preset + a duo-shape swap
+  button in [`Pedigree.tsx`](app/web/src/components/Pedigree.tsx); fixed
+  `inferPipelineMode`, which had classified a sibling-only pedigree as a plain
+  singleton. Follow-up PR #3 fixed a real bug found via live testing: swapping
+  parent→sibling left the generic "+ Add father/mother" buttons visible,
+  which added a parent as an unintended *third* member instead of swapping
+  the sibling back out — now `isSiblingDuo` hides those and offers explicit
+  father/mother swap-backs instead. New tests: `engine/tests/test_inheritance.py`
+  (didn't exist before — `assign_models` was previously only exercised via the
+  trio e2e fixture) + sibling-duo PED loader cases.
+- **CI dependency drift (twice in one day — a pattern worth remembering).**
+  `main`'s `ruff check` broke with 308 findings and zero source changes:
+  `engine/pyproject.toml` had `ruff>=0.4` unpinned, and ruff 0.16.0's default
+  rule selection is dramatically broader than 0.15.22's (verified empirically
+  — a bare `pyproject.toml` with no `[tool.ruff]` triggers `UP045` etc. under
+  0.16.0 but not 0.15.22). Pinned `ruff==0.15.22` + added an explicit
+  `[tool.ruff.lint] select` so a future ruff release can't silently repeat
+  this. **Same class of bug hit production hours later**: `engine/Dockerfile`
+  had `starlette>=0.37` unpinned; a rebuild picked up starlette 1.6.0, which
+  removed the `Starlette(on_startup=[...])` constructor kwarg entirely (ASGI
+  `lifespan=` context manager required instead). The Fly machine was
+  crash-looping on every boot (`exit_code=1` within ~5-8s, confirmed via
+  `fly logs`, Fly's runner had hit "max restart count of 10" and given up) —
+  **any real case submitted via the Worker during that window would have
+  failed**. Fixed in [`container_server.py`](tracks/container_server.py) (new
+  `_lifespan` async context manager wrapping the existing `_on_startup()`) +
+  pinned `starlette==1.6.0` in the Dockerfile. Both fixes verified locally
+  before pushing (reproduced the exact crash in a matching venv, drove the
+  ASGI lifespan protocol + a `GET /healthz` directly) since this sandbox has
+  no network path to fly.io to test against a real deploy. **Lesson: the
+  unpinned-floor pattern (`package>=X`) in both `engine/pyproject.toml` dev
+  deps and `engine/Dockerfile`'s runtime deps is a real, recurring risk — only
+  `starlette` and `ruff` are pinned exactly now; the rest (`pydantic`,
+  `httpx`, `requests`, `networkx`, `uvicorn`) still carry the same latent
+  exposure.**
+- **Fly.io cost audit (~$31/mo billed in July, "machines were off").** Cost
+  Explorer breakdown: ~69% (`$21.54`) was compute for a stale `shared-cpu-4x`
+  machine that hadn't been redeployed since it was created 2026-06-11 (the PR
+  #1 merge's engine-path deploy on 07-27 finally redeployed it down to the
+  correct `shared-cpu-2x/4GB` from `fly.toml` — zero compute billed since).
+  Confirmed `FLY_API_TOKEN` is set (self-stop is genuinely armed) and the
+  volume is 50GB against a documented `--size 10` intent — actual usage is
+  only 16GB (`refs/` reference genome + BWA index = 8.3GB, AnnotSV install +
+  deps = the rest). **Decided not to shrink the volume**: Fly volumes can't
+  resize down in place, snapshot-restore and `volumes fork` both require the
+  target ≥ the source's *nominal* size (not actual data used) so neither
+  helps, and a Fly Machine can only ever mount one volume — freeing the old
+  volume to copy off it would require destroying the live production machine
+  first, a real (if brief) availability risk for ~$4-5/mo of savings. Left at
+  50GB; ongoing cost floor is ~$9.65/mo (volume + its scheduled snapshots).
+
+### 2026-07-17 — Security review, tenant isolation, Fly scale-to-zero, CI green
 
 Code-review pass on the deployed stack, then fixes shipped in severity order and
 verified live. Three commits to `main`: `ab97e88` (security), `9dda97a` (Fly
