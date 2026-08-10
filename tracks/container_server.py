@@ -36,6 +36,7 @@ import tempfile
 import time
 import traceback
 import gc
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
 
@@ -1093,11 +1094,23 @@ async def _execute_job(job: dict[str, Any]) -> None:
         )
 
 
+@asynccontextmanager
+async def _lifespan(_app: Starlette):
+    # Starlette's on_startup=[...] constructor kwarg was removed in newer
+    # major versions (1.x) in favor of this ASGI lifespan context manager —
+    # the unpinned `starlette>=0.37` Docker build picked up 1.x and the app
+    # crashed on every boot with TypeError: unexpected keyword argument
+    # 'on_startup'. Keep this in sync with _on_startup's single responsibility
+    # (scheduling the idle self-stop check).
+    await _on_startup()
+    yield
+
+
 app = Starlette(
     debug=os.getenv("VGPT_DEBUG") == "1",
     routes=[
         Route("/healthz", healthz, methods=["GET"]),
         Route("/run", run, methods=["POST"]),
     ],
-    on_startup=[_on_startup],
+    lifespan=_lifespan,
 )

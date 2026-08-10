@@ -79,13 +79,22 @@ COPY tracks /app/tracks
 
 # Lean Python dependency set (matches the pure-Python pipeline slice; GATK/AnnotSV
 # do the heavy lifting via subprocess, so no cyvcf2/pysam needed here).
+#
+# starlette is pinned exactly: an unpinned `starlette>=0.37` silently picked up
+# 1.x on a later image rebuild, which removed the Starlette(on_startup=[...])
+# constructor kwarg entirely (ASGI lifespan context manager is now required —
+# see tracks/container_server.py's _lifespan) and crashed the container on
+# every boot with no code change on our side. Verified 1.6.0 works with the
+# lifespan= fix; re-verify before bumping. The other deps below are still
+# unpinned floors and carry the same latent risk — worth pinning them too if
+# this recurs with a different package.
 RUN pip install \
         "pydantic>=2.6" \
         "pyyaml>=6.0" \
         "httpx>=0.27" \
         "requests>=2.32" \
         "networkx>=3.2" \
-        "starlette>=0.37" \
+        "starlette==1.6.0" \
         "uvicorn>=0.30" \
     && pip install --no-deps -e /app/engine
 
