@@ -70,6 +70,14 @@ cd D:\Projects\VariantGPT\app\api
 wrangler d1 migrations apply variantgpt-db --remote
 ```
 
+> **Pending migrations — apply before the next Worker deploy.**
+> - `0004_case_owner.sql` — `cases.owner_id`, required by `caseAccessGate`.
+> - `0005_reclass_decisions.sql` — the `reclass_decisions` table behind curator
+>   sign-off (PRD §4.10). Without it, `GET/POST /api/cases/:id/decisions` and the
+>   server-rendered report (which reads decisions to resolve each variant's tier)
+>   fail with a D1 "no such table" error. Apply it **before** deploying the
+>   Worker, not after.
+
 ---
 
 ## 3. R2 bucket (already provisioned) + API token

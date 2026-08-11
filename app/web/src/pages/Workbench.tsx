@@ -8,8 +8,11 @@ import { RunMonitor, useJobStatus } from "../components/RunMonitor";
 import { ClinvarAudit } from "../components/ClinvarAudit";
 import { StructuralVariantsPanel } from "../components/StructuralVariantsPanel";
 import { ClinVarFlag } from "../components/ClinVarFlag";
+import { DecisionStatusChip, ReclassDecision } from "../components/ReclassDecision";
 import { useNavigate, useParams } from "react-router-dom";
 import { useDemoCase } from "../caseData";
+import { useDecisions, tierForVariant, type UseDecisions } from "../decisions";
+import { useCuratorName } from "../auth";
 import { api, apiFetch } from "../apiBase";
 import type { InheritanceModel, Tier, VariantRow } from "../types";
 import { DEFAULT_PHENO_ALGO, PhenotypeBar, phenoPercent } from "../phenotype";
@@ -56,6 +59,10 @@ export function Workbench() {
   // though we have stale case.json, we want to surface a live progress banner
   // and auto-reload when status flips back to ready.
   const job = useJobStatus(isUploadedCase ? caseId : undefined);
+  // Curator sign-off state for the whole case — one fetch, shared by the table
+  // (status chips) and the drawer (the decision panel). PRD §4.10.
+  const decisions = useDecisions(caseId);
+  const curatorName = useCuratorName();
   const showMonitor = isUploadedCase && !data && (job?.status !== "ready" || error);
   const variants: VariantRow[] = data?.variants ?? [];
   const structuralVariants = data?.structural_variants ?? [];
@@ -193,6 +200,9 @@ export function Workbench() {
 
   const selected = variants.find((v) => v.id === selectedId) ?? null;
   const reclassCount = variants.filter((v) => v.reclass).length;
+  // Proposals with no live curator decision. Counted from the server's pending
+  // list, restricted to variants actually present in this case.json.
+  const pendingCount = variants.filter((v) => v.reclass && decisions.pending.has(v.id)).length;
   const allVisibleSelected = visible.length > 0 && visible.every((v) => selectedForReport.has(v.id));
 
   if (showMonitor) {
@@ -329,6 +339,20 @@ export function Workbench() {
               {isReclassTab && reclassCount > 0 ? (
                 <span style={{ marginLeft: 6, fontFamily: "var(--font-mono)", fontSize: 11 }}>
                   {reclassCount}
+                </span>
+              ) : null}
+              {/* Un-reviewed proposals are the actionable number here — a
+                  reclassification does nothing until a curator signs it off. */}
+              {isReclassTab && pendingCount > 0 ? (
+                <span
+                  title={`${pendingCount} proposal${pendingCount === 1 ? "" : "s"} awaiting your decision`}
+                  style={{
+                    marginLeft: 6, fontFamily: "var(--font-mono)", fontSize: 10,
+                    padding: "1px 5px", borderRadius: 999,
+                    border: "1px solid #b07d2b", color: "#b07d2b", background: "rgba(176,125,43,0.10)",
+                  }}
+                >
+                  {pendingCount} pending
                 </span>
               ) : null}
             </button>
@@ -526,7 +550,14 @@ export function Workbench() {
                         <PhenotypeBar percent={v.phenotype_relevance ? phenoPercent(v, DEFAULT_PHENO_ALGO) : null} />
                       </td>
                     ) : null}
-                    <td className="col-delta" onClick={() => setSelectedId(v.id)}>{v.reclass ? <ReclassBadge {...v.reclass} /> : null}</td>
+                    <td className="col-delta" onClick={() => setSelectedId(v.id)}>
+                      {v.reclass ? (
+                        <span style={{ display: "inline-flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
+                          <ReclassBadge {...v.reclass} />
+                          <DecisionStatusChip state={tierForVariant(v, true, decisions.byVariant.get(v.id)).state} />
+                        </span>
+                      ) : null}
+                    </td>
                   </tr>
                 );
               })}
@@ -548,6 +579,8 @@ export function Workbench() {
           <Drawer
             variant={selected}
             caseId={caseId}
+            decisions={decisions}
+            curatorName={curatorName}
             hpoTerms={data?.hpo ?? []}
             clinicalHistory={data?.clinical_history ?? null}
             geneInfo={data?.gene_info ?? {}}
@@ -561,10 +594,12 @@ export function Workbench() {
 }
 
 function Drawer({
-  variant, caseId, hpoTerms, clinicalHistory, geneInfo, probandMember, onClose,
+  variant, caseId, decisions, curatorName, hpoTerms, clinicalHistory, geneInfo, probandMember, onClose,
 }: {
   variant: VariantRow;
   caseId?: string;
+  decisions: UseDecisions;
+  curatorName?: string;
   hpoTerms: import("../caseData").HPOTermRow[];
   clinicalHistory: import("../caseData").ClinicalHistory | null;
   geneInfo: Record<string, import("../caseData").GeneInfoRow>;
@@ -600,35 +635,7 @@ function Drawer({
           (OMIM), Classification with ACMG strength). */}
       <ClinicalCard v={variant} />
 
-      {variant.reclass ? (
-        <div
-          className="card"
-          style={{
-            marginTop: 16,
-            background: "rgba(180,84,30,0.04)",
-            borderColor: "rgba(180,84,30,0.25)",
-            padding: 16,
-          }}
-        >
-          <strong>
-            {variant.reclass.from} → {variant.reclass.to}
-          </strong>{" "}
-          <span style={{ color: "var(--ink-soft)", fontFamily: "var(--font-mono)" }}>
-            Δ {variant.reclass.delta}
-          </span>
-          <div style={{ marginTop: 8, fontSize: 13 }}>
-            Changed: <span className="mono">{variant.reclass.criteria.join(", ")}</span>
-          </div>
-          <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
-            <button className="primary">Accept</button>
-            <button>Reject</button>
-            <button>Modify…</button>
-          </div>
-          <div style={{ marginTop: 8, fontSize: 12, color: "var(--ink-soft)" }}>
-            Awaiting your decision. Decisions are audit-logged and irreversible.
-          </div>
-        </div>
-      ) : null}
+      <ReclassDecision variant={variant} decisions={decisions} curatorName={curatorName} />
 
       {variant.clinvar_concordance ? (
         <Section title="ClinVar concordance">

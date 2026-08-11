@@ -51,11 +51,16 @@ app.route("/api", apiRouter);
 // sibling under /api so it shares the Clerk auth gate.
 app.route("/api/ai", aiRouter);
 
-// NOTE: the earlier /cases, /variants, /proposals routers (routes/cases.ts,
-// variants.ts, proposals.ts) are intentionally NOT mounted. They were an
-// unreachable second case API — the SPA never called them, they query D1
-// tables the pipeline doesn't populate, and they lacked ownership checks. The
-// files are kept for the future curator UI, but MUST gain owner scoping (like
-// caseAccessGate) before being re-mounted. Do not re-add them here as-is.
+// NOTE: the earlier /cases and /variants routers (routes/cases.ts,
+// variants.ts) are intentionally NOT mounted. They were an unreachable second
+// case API — the SPA never called them, they query D1 tables the pipeline
+// doesn't populate, and they lacked ownership checks. They MUST gain owner
+// scoping (like caseAccessGate) before being re-mounted. Do not re-add them
+// here as-is.
+//
+// routes/proposals.ts is gone: the curator reclass-decision flow it sketched
+// now lives for real at /api/cases/:id/decisions in routes/api.ts (owner-scoped
+// via caseAccessGate, keyed to case.json rather than the empty D1 variants
+// table). See src/decisions.ts for the rules.
 
 export default app;

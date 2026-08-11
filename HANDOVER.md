@@ -1,7 +1,7 @@
 # VariantGPT — Session Handover
 
-**Last updated:** 2026-08-10
-**Working tree:** `~/projects/variantgpt-trios` (git: `musicofthings/variantgpt-trios`, branch `main` — 2026-08-10 sibling-duo + production-crash fix, HEAD `208e2c7`)
+**Last updated:** 2026-08-11
+**Working tree:** `~/projects/variantgpt-trios` (git: `musicofthings/variantgpt-trios`, branch `main` — 2026-08-11 curator sign-off on reclassification, on top of `8f8a7e7` sibling-duo + production-crash fix)
 **Specs:** [`VariantGPT_PRD_TRD.md`](VariantGPT_PRD_TRD.md) · [`VariantGPT_Frontend_Design_Spec.md`](VariantGPT_Frontend_Design_Spec.md)
 **Deploy:** [`infra/DEPLOY.md`](infra/DEPLOY.md)
 
@@ -171,7 +171,14 @@ Per-variant clinical narrative drafted by Anthropic Claude on demand:
 4. ~~**Server-side PDF generation**~~ — ✅ done (2026-06-02, [report.ts](app/api/src/report.ts), `GET|POST /api/cases/:id/report`). Self-contained server-rendered HTML (archival, no JS/auth to render); `?format=pdf` uses Cloudflare Browser Rendering REST when `BROWSER_RENDERING_TOKEN` is set, else 501→HTML. SPA Report "Archival HTML" button.
 5. ~~**Compound-het PM3 trans-partner ClinVar lookup**~~ — ✅ done (2026-05-29). ~~PS1 / PM5 (ClinVar-by-gene+codon index)~~ — ✅ done (2026-06-02, [clinvar_aa.py](engine/src/variantgpt_engine/annotation_sources/clinvar_aa.py) + [acmg/context.py](engine/src/variantgpt_engine/acmg/context.py)). Remaining ACMG gaps: **PS3** (needs a functional-evidence dataset — MaveDB / ClinGen functional), **PP2** (needs gene missense-constraint + mechanism data), **BS3 / BS4 / BP2**.
 6. **Unpinned dependency floors** (`engine/pyproject.toml` dev deps, `engine/Dockerfile` runtime deps) — `ruff` and `starlette` are now pinned exactly after each broke `main`/production respectively on 2026-08-10 with zero source changes (a version bump alone). `pydantic`, `httpx`, `requests`, `networkx`, `uvicorn` are all still `>=` floors and carry the same latent risk of a future rebuild silently breaking on an upstream release. Worth auditing/pinning proactively rather than waiting for the next one to hit production.
-7. **CNV/SV/mitochondrial heteroplasmy** — out of scope per PRD §1.
+7. **CNV/SV** — shipped 2026-06 (ClinGen/ACMG 2019 dosage classifier in
+   `acmg/cnv.py`, AnnotSV ingestion, gCNV/Manta calling). Mitochondrial
+   heteroplasmy remains out of scope per PRD §1. Deploy-side, CNV *calling*
+   still needs a gCNV PON bundle uploaded to R2.
+8. ~~**Curator sign-off on reclassification**~~ — ✅ done (2026-08-11). See the
+   session log below. Remaining nearby work: pending-proposal surfacing in the
+   Analysis Workbench, and report *signing* (`cases.signed_by`/`signed_at` are
+   still unused columns).
 
 ### Resolved this session (2026-05-28)
 - ✅ CI lint debt cleared (`ruff check src tests` clean)
@@ -218,7 +225,79 @@ The `VITE_API_BASE` is hardcoded in the workflow file itself.
 
 ## Session log
 
-### 2026-08-10 (latest) — Sibling-duo pedigree, CI dependency drift, production crash fix, Fly cost audit
+### 2026-08-11 (latest) — Curator sign-off on reclassification (PRD §4.10 closed)
+
+The §4.10 invariant ("reclassification never auto-commits; every tier change
+requires a recorded human-curator decision") was enforced in the *engine* —
+`reclassify.py` emits every proposal `pending` — but nowhere else. There was no
+way to record a decision and nothing consumed one:
+
+- The Workbench drawer had **Accept / Reject / Modify… buttons with no
+  `onClick`** and the caption "Decisions are audit-logged and irreversible".
+- `routes/proposals.ts` held a decision endpoint that was **unmounted**,
+  unauthorized, and queried D1 tables (`reclass_proposals`, `variants`) that the
+  pipeline never populates — the real data lives in R2 `case.json`.
+- **The report asserted classifications nobody approved.** `report.ts::tierOf`
+  returned `reclass_tier ?? baseline_tier`, so a signed report printed the
+  proposed tier for a proposal still sitting at `pending`. `Report.tsx` narrated
+  it as fact ("South-Asian allele-frequency review *reclassified* this variant
+  from X to Y") under a section headed "Reclassification decisions" whose
+  Decision column was the hardcoded string `Pending`.
+
+Now closed end-to-end:
+
+- **Schema** — [`0005_reclass_decisions.sql`](infra/migrations/0005_reclass_decisions.sql).
+  Keyed `(case_id, variant_id)` against the case.json emission, not the empty D1
+  variants table. **Append-only**: re-deciding inserts a new row and the previous
+  one stays; the live decision is `ORDER BY decided_at DESC, rowid DESC` (rowid
+  breaks same-second ties — `datetime('now')` is second-resolution).
+- **Fingerprinting (the correctness core).** Each decision stores a
+  `proposal_fingerprint` = tier movement + the changed-criteria set,
+  order-independent. If the engine re-runs and the proposal changes, the
+  fingerprint no longer matches, the decision is reported **stale**, and the
+  variant returns to pending. Without this a rerun would silently inherit
+  approval for evidence nobody looked at.
+- **Rules module** — [`app/api/src/decisions.ts`](app/api/src/decisions.ts),
+  pure and unit-tested. `resolveTier()` is the single answer to "what tier does
+  this variant carry?": **pending, stale, and rejected all report the BASELINE
+  tier.** `report.ts` and the SPA both call it, so screen and paper can't
+  disagree. Rejections and modifications require a rationale note (disagreeing
+  with the engine without saying why makes the audit trail useless); accepts
+  don't.
+- **API** — `GET|POST /api/cases/:id/decisions` in
+  [`routes/api.ts`](app/api/src/routes/api.ts), owner-scoped for free via the
+  existing `caseAccessGate`. Writes `reclass_decisions` + `audit_log` in one
+  batch. `variant_id` travels in the POST body, not the path — engine ids are
+  `chrom:pos:ref:alt` and don't survive a path segment.
+- **Report** — the server renderer takes live decisions and gained a cover-page
+  ledger (proposal / decision / reported-as / curator / date / rationale) with a
+  loud banner when proposals are undecided. Its disclaimer now carries the
+  **research-use / non-diagnostic** wording the §4.9 invariant requires (it
+  previously said only "provisional… confirm before patient care").
+- **SPA** — real `<ReclassDecision>` panel replacing the dead buttons, always
+  stating *"Reported classification: X"* so a pending proposal can never read as
+  a classification; per-row decision chips; a `N pending` badge on the
+  Reclassified tab; report prose rewritten to say "**proposed** reclassifying …"
+  plus the decision outcome.
+- **Dev parity** — `vite.devCaseApi.ts` implements the same endpoints against a
+  `decisions.json` file, importing the rules from `src/decisionRules.ts` (kept
+  free of `import.meta.env` so it loads in the Vite config's Node context).
+- `routes/proposals.ts` **deleted** — superseded.
+- Tests: 23 new in `decisions.test.ts` + 6 in `report.test.ts`; API suite 50
+  passed, both typechecks + web build clean. Verified in the browser against
+  `duo-test` (MEFV VUS→LB): reject-with-note → accept → append-only history of 2
+  rows, and a tampered fingerprint correctly flipped the variant back to
+  "Needs re-review".
+
+⚠️ **Deploy prerequisite:** apply migration `0005` (`wrangler d1 migrations
+apply variantgpt-db --remote`) **before** the next Worker deploy — the report
+route reads `reclass_decisions` and will 500 without the table.
+
+Still open here: `AnalysisWorkbench` doesn't surface pending proposals, and
+nothing blocks generating a report while proposals are undecided (it warns
+loudly instead). Signing (`cases.signed_by` / `signed_at`) is still unused.
+
+### 2026-08-10 — Sibling-duo pedigree, CI dependency drift, production crash fix, Fly cost audit
 
 Four PRs merged to `main`: `9e750bb`/`4525a89` (PR #1, sibling-duo pedigree),
 `36cdd1f` (PR #3, pedigree-builder swap-back bug), `689539e` (PR #4, production

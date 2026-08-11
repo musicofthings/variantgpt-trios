@@ -15,6 +15,10 @@ import { AwsClient } from "aws4fetch";
 import type { Bindings, Variables } from "../bindings";
 import { olsSelect } from "../hpo";
 import { buildReportHtml, type ReportEmission } from "../report";
+import {
+  isLive, latestByVariant, proposalFingerprint, validateDecision,
+  type DecisionInput, type DecisionRow, type ProposalLike,
+} from "../decisions";
 
 export const apiRouter = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
@@ -990,6 +994,154 @@ apiRouter.get("/cases/:id", async (c) => {
   });
 });
 
+// ─────────────────── curator sign-off on reclassification (PRD §4.10) ───────────────────
+//
+// Reclassification never auto-commits. The engine emits every proposal
+// `pending`; the tier only moves once a curator records a decision here. Rows
+// are APPEND-ONLY — changing your mind inserts a new row and the old one stays
+// as history. See src/decisions.ts for the rules (all pure + unit-tested).
+//
+// These live under /cases/:id/*, so caseAccessGate already scopes them to the
+// case owner — a decision can only be recorded by the owner of the case.
+
+/** Proposals from the case.json emission, keyed by variant id. `null` when the
+ *  case has no emission yet (engine hasn't finished / case.json missing). */
+async function loadProposals(
+  c: import("hono").Context<{ Bindings: Bindings; Variables: Variables }>,
+  id: string,
+): Promise<Map<string, ProposalLike> | null> {
+  const obj = await c.env.BUCKET.get(`cases/${id}/case.json`);
+  if (!obj) return null;
+  try {
+    const emission = (await obj.json()) as { proposals?: ProposalLike[] };
+    return new Map((emission.proposals ?? []).map((p) => [p.variant_id, p]));
+  } catch {
+    return null;
+  }
+}
+
+const DECISION_COLS =
+  `id, case_id, variant_id, action, from_tier, proposed_tier, final_tier,
+   curator, curator_name, note, proposal_fingerprint, decided_at`;
+
+/**
+ * GET /api/cases/:id/decisions
+ * → { decisions, history, pending, proposal_count }
+ *
+ *   decisions — the live decision per variant, each flagged `stale` when the
+ *               proposal has changed underneath it since it was recorded
+ *   history   — every decision ever recorded for this case, newest first
+ *   pending   — variant ids with a proposal but no live sign-off
+ */
+apiRouter.get("/cases/:id/decisions", async (c) => {
+  const id = sanitize(c.req.param("id"));
+  if (!id) return c.json({ error: "bad caseId" }, 400);
+
+  const res = await c.env.DB.prepare(
+    // decided_at only has second resolution, so rowid breaks same-second ties
+    // and keeps "newest first" honest for latestByVariant().
+    `SELECT ${DECISION_COLS} FROM reclass_decisions
+      WHERE case_id = ? ORDER BY decided_at DESC, rowid DESC`,
+  ).bind(id).all<DecisionRow>();
+  const rows = res.results ?? [];
+
+  const proposals = await loadProposals(c, id);
+  // No emission to compare against → report decisions as-is rather than
+  // guessing at staleness.
+  const staleOf = (d: DecisionRow) => (proposals ? !isLive(proposals.get(d.variant_id), d) : false);
+
+  const live = latestByVariant(rows);
+  const decisions = [...live.values()].map((d) => ({ ...d, stale: staleOf(d) }));
+  const pending = proposals
+    ? [...proposals.keys()].filter((vid) => {
+        const d = live.get(vid);
+        return !d || !isLive(proposals.get(vid), d);
+      })
+    : [];
+
+  return c.json({
+    decisions,
+    history: rows.map((d) => ({ ...d, stale: staleOf(d) })),
+    pending,
+    proposal_count: proposals?.size ?? 0,
+  });
+});
+
+/**
+ * POST /api/cases/:id/decisions
+ *   body { variant_id, action: accept|reject|modify, final_tier?, note?, curator_name? }
+ * → the recorded decision.
+ *
+ * variant_id travels in the body, not the path: engine variant ids are
+ * `chrom:pos:ref:alt`, which doesn't survive a path segment cleanly.
+ */
+apiRouter.post("/cases/:id/decisions", async (c) => {
+  const id = sanitize(c.req.param("id"));
+  if (!id) return c.json({ error: "bad caseId" }, 400);
+
+  let body: { variant_id?: unknown } & DecisionInput;
+  try {
+    body = (await c.req.json()) as typeof body;
+  } catch {
+    return c.json({ error: "body must be JSON" }, 400);
+  }
+  const variantId = typeof body.variant_id === "string" ? body.variant_id : "";
+  if (!variantId) return c.json({ error: "variant_id is required" }, 400);
+
+  const proposals = await loadProposals(c, id);
+  if (!proposals) return c.json({ error: "case.json not found — run the case first" }, 404);
+  const proposal = proposals.get(variantId);
+  // Only a proposed change can be signed off. A variant the engine never
+  // proposed to move has nothing to decide.
+  if (!proposal) {
+    return c.json({ error: "no reclassification proposal for this variant" }, 404);
+  }
+
+  const v = validateDecision(body, proposal);
+  if (!v.ok) return c.json({ error: v.error }, 400);
+
+  const row: DecisionRow = {
+    id: crypto.randomUUID(),
+    case_id: id,
+    variant_id: variantId,
+    action: v.action,
+    from_tier: proposal.from_tier,
+    proposed_tier: proposal.to_tier,
+    final_tier: v.final_tier,
+    curator: c.get("userId"),
+    curator_name: v.curator_name,
+    note: v.note,
+    proposal_fingerprint: proposalFingerprint(proposal),
+    decided_at: new Date().toISOString().replace("T", " ").slice(0, 19),
+  };
+
+  await c.env.DB.batch([
+    c.env.DB.prepare(
+      `INSERT INTO reclass_decisions
+         (${DECISION_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).bind(
+      row.id, row.case_id, row.variant_id, row.action, row.from_tier, row.proposed_tier,
+      row.final_tier, row.curator, row.curator_name, row.note, row.proposal_fingerprint,
+      row.decided_at,
+    ),
+    c.env.DB.prepare(
+      `INSERT INTO audit_log (id, case_id, actor, action, payload_json)
+       VALUES (?, ?, ?, ?, ?)`,
+    ).bind(
+      crypto.randomUUID(), id, row.curator, `reclass_${row.action}`,
+      JSON.stringify({
+        variant_id: variantId,
+        from_tier: row.from_tier,
+        proposed_tier: row.proposed_tier,
+        final_tier: row.final_tier,
+        note: row.note,
+      }),
+    ),
+  ]);
+
+  return c.json({ decision: { ...row, stale: false } }, 201);
+});
+
 /**
  * GET|POST /api/cases/:id/report?format=html|pdf&variants=id1,id2
  *   → a self-contained, print-ready clinical report rendered server-side from
@@ -1035,7 +1187,16 @@ apiRouter.all("/cases/:id/report", async (c) => {
     }
   }
 
-  const html = buildReportHtml(emission, selected);
+  // Curator sign-off (PRD §4.10). The report renders the BASELINE tier for any
+  // proposal without a live decision, so these have to be loaded — omitting
+  // them would silently print every case as fully un-reviewed.
+  const decRes = await c.env.DB.prepare(
+    `SELECT ${DECISION_COLS} FROM reclass_decisions
+      WHERE case_id = ? ORDER BY decided_at DESC, rowid DESC`,
+  ).bind(id).all<DecisionRow>();
+  const liveDecisions = [...latestByVariant(decRes.results ?? []).values()];
+
+  const html = buildReportHtml(emission, selected, liveDecisions);
   const format = (c.req.query("format") ?? "html").toLowerCase();
 
   if (format !== "pdf") {

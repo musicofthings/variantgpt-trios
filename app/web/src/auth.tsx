@@ -115,6 +115,22 @@ export function UserChip() {
   return <ClerkUserChip />;
 }
 
+/** Display name to stamp on curator decisions (PRD §4.10 audit trail).
+ *
+ *  The Worker always records the authoritative Clerk `sub`; this is only the
+ *  human-readable name shown on the report, so `undefined` is fine when Clerk
+ *  isn't configured. Safe to call unconditionally — it never invokes Clerk's
+ *  hooks unless a ClerkProvider is actually mounted. */
+export function useCuratorName(): string | undefined {
+  // Hook order is stable across renders: PUBLISHABLE_KEY is a module constant,
+  // so a given build takes exactly one of these branches for its lifetime.
+  if (!PUBLISHABLE_KEY) return undefined;
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  const { user, isLoaded } = useUser();
+  if (!isLoaded || !user) return undefined;
+  return user.fullName ?? user.username ?? user.primaryEmailAddress?.emailAddress ?? undefined;
+}
+
 function ClerkUserChip() {
   const { user, isLoaded } = useUser();
   if (!isLoaded) return null;

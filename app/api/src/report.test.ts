@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildReportHtml, esc, type ReportEmission } from "./report";
+import { proposalFingerprint, type DecisionRow } from "./decisions";
 
 function emission(): ReportEmission {
   return {
@@ -84,6 +85,80 @@ describe("buildReportHtml", () => {
     const html = buildReportHtml(emission());
     expect(html).toContain("Likely pathogenic");
     expect(html).toContain("Acts as a tumor suppressor.");
+  });
+
+  // ── curator sign-off (PRD §4.10) ──
+  //
+  // The engine proposes VUS → LP. Until a curator accepts, the report must
+  // print VUS. These tests are the paper-side guard on that invariant.
+
+  function withProposal(): ReportEmission {
+    const e = emission();
+    e.variants![0].reclass_tier = "LP";
+    e.proposals = [
+      {
+        variant_id: "v1",
+        from_tier: "VUS",
+        to_tier: "LP",
+        changed_criteria: [{ criterion: "PM2", fired: false }],
+      },
+    ];
+    return e;
+  }
+
+  function decisionFor(over: Partial<DecisionRow> = {}): DecisionRow {
+    return {
+      id: "d1",
+      case_id: "case-xyz",
+      variant_id: "v1",
+      action: "accept",
+      from_tier: "VUS",
+      proposed_tier: "LP",
+      final_tier: "LP",
+      curator: "user_abc",
+      curator_name: "Dr Rao",
+      note: null,
+      proposal_fingerprint: proposalFingerprint(withProposal().proposals![0]),
+      decided_at: "2026-08-11 10:00:00",
+      ...over,
+    };
+  }
+
+  it("reports the baseline tier while a proposal is undecided", () => {
+    const html = buildReportHtml(withProposal(), ["v1"]);
+    expect(html).toContain("Awaiting curator review");
+    expect(html).toContain("awaiting curator review");
+    expect(html).toContain("<strong>VUS</strong>"); // classification row, not LP
+    expect(html).toContain("has not been applied");
+  });
+
+  it("reports the proposed tier once a curator accepts, and names them", () => {
+    const html = buildReportHtml(withProposal(), ["v1"], [decisionFor()]);
+    expect(html).toContain("Accepted by curator");
+    expect(html).toContain("Dr Rao");
+    expect(html).toContain("2026-08-11 10:00:00");
+    expect(html).toContain("<strong>LP</strong>");
+    expect(html).not.toContain("has not been applied");
+  });
+
+  it("prints the curator's note and reverts the tier on a rejection", () => {
+    const d = decisionFor({ action: "reject", final_tier: "VUS", note: "IndiGen AN too low" });
+    const html = buildReportHtml(withProposal(), ["v1"], [d]);
+    expect(html).toContain("Rejected by curator");
+    expect(html).toContain("IndiGen AN too low");
+    expect(html).toContain("<strong>VUS</strong>");
+  });
+
+  it("treats a decision from a superseded proposal as needing re-review", () => {
+    const e = withProposal();
+    e.proposals![0].to_tier = "P"; // engine re-ran with different evidence
+    const html = buildReportHtml(e, ["v1"], [decisionFor()]);
+    expect(html).toContain("Needs re-review");
+    expect(html).toContain("<strong>VUS</strong>"); // stale sign-off ≠ approval
+  });
+
+  it("always carries the research-use / non-diagnostic disclaimer", () => {
+    expect(buildReportHtml(emission())).toContain("RESEARCH USE ONLY");
   });
 
   it("honors an explicit variant selection (empty → no detail pages)", () => {

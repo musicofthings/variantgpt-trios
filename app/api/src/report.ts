@@ -11,8 +11,13 @@
  * page per selected variant (clinical summary, gene prose, fired-only ACMG
  * evidence, family calls, population AFs, predictors, reclassification).
  *
- * buildReportHtml is pure (emission in, HTML string out) and unit-tested.
+ * buildReportHtml is pure (emission in + curator decisions in, HTML string out)
+ * and unit-tested.
  */
+import {
+  isLive, resolveTier,
+  type DecisionRow, type ProposalLike, type TierState,
+} from "./decisions";
 
 // ---- Structural subset of the engine CaseEmission we consume ----
 
@@ -83,8 +88,27 @@ export interface ReportEmission {
     family_history?: string;
   } | null;
   variants?: ReportVariant[];
+  /** South-Asian reclassification proposals. Each is `pending` until a curator
+   *  signs off — see the decisions argument to buildReportHtml. */
+  proposals?: ProposalLike[];
   versions?: Record<string, string>;
 }
+
+/** Proposals + curator decisions, resolved once and threaded through rendering
+ *  so every tier printed on the report comes from the same rule. */
+interface TierCtx {
+  proposals: Map<string, ProposalLike>;
+  decisions: Map<string, DecisionRow>;
+}
+
+const TIER_STATE_LABEL: Record<TierState, string> = {
+  no_proposal: "",
+  pending: "Awaiting curator review",
+  stale: "Needs re-review — the proposal changed after it was decided",
+  accepted: "Accepted by curator",
+  modified: "Modified by curator",
+  rejected: "Rejected by curator",
+};
 
 const STRENGTH_LABEL: Record<string, string> = {
   VS: "Very Strong",
@@ -137,8 +161,17 @@ function pickVariants(
     .slice(0, MAX_DEFAULT_VARIANTS);
 }
 
-function tierOf(v: ReportVariant): string {
-  return v.reclass_tier ?? v.baseline_tier ?? "—";
+/**
+ * The classification this report prints for a variant.
+ *
+ * Delegates to resolveTier (src/decisions.ts) so paper and screen can't
+ * disagree. Note this deliberately does NOT print `reclass_tier` just because
+ * the engine proposed it: a pending, stale, or rejected proposal reports the
+ * baseline tier. A signed report must never assert a reclassification that no
+ * human approved (PRD §4.10).
+ */
+function tierOf(v: ReportVariant, ctx: TierCtx): { tier: string; state: TierState } {
+  return resolveTier(v, ctx.proposals.get(v.id), ctx.decisions.get(v.id));
 }
 
 function patientDetails(emission: ReportEmission): string {
@@ -172,14 +205,58 @@ function hpoTable(emission: ReportEmission): string {
     .join("")}</tbody></table>`;
 }
 
-function findingsSummary(variants: ReportVariant[]): string {
+function findingsSummary(variants: ReportVariant[], ctx: TierCtx): string {
   if (!variants.length) return `<p class="muted">No variants selected.</p>`;
   return `<table class="grid"><thead><tr><th>Gene</th><th>Variant (c. / p.)</th><th>Consequence</th><th>Inheritance</th><th>Classification</th></tr></thead><tbody>${variants
-    .map(
-      (v) =>
-        `<tr><td>${esc(v.gene)}</td><td class="mono">${esc(v.hgvs_c)} ${esc(v.hgvs_p)}</td><td>${esc(v.consequence)}</td><td>${esc((v.inheritance_models ?? []).join(", "))}</td><td><strong>${esc(tierOf(v))}</strong></td></tr>`,
-    )
+    .map((v) => {
+      const t = tierOf(v, ctx);
+      return `<tr><td>${esc(v.gene)}</td><td class="mono">${esc(v.hgvs_c)} ${esc(v.hgvs_p)}</td><td>${esc(v.consequence)}</td><td>${esc((v.inheritance_models ?? []).join(", "))}</td><td><strong>${esc(t.tier)}</strong></td></tr>`;
+    })
     .join("")}</tbody></table>`;
+}
+
+/**
+ * Cover-page ledger of every reclassification proposal touching a selected
+ * variant, and what a curator did about it. This is the §4.10 audit surface:
+ * who decided, when, and why — or an explicit "awaiting review" when nobody
+ * has.
+ */
+function reclassLedger(variants: ReportVariant[], ctx: TierCtx): string {
+  const rows = variants
+    .map((v) => ({ v, p: ctx.proposals.get(v.id), d: ctx.decisions.get(v.id) }))
+    .filter((r): r is { v: ReportVariant; p: ProposalLike; d: DecisionRow | undefined } => r.p != null);
+  if (!rows.length) return "";
+
+  const undecided = rows.filter(({ p, d }) => !isLive(p, d)).length;
+  const banner = undecided
+    ? `<p class="pending-note"><strong>${undecided} of ${rows.length} reclassification proposal${rows.length === 1 ? "" : "s"} ${undecided === 1 ? "is" : "are"} awaiting curator review.</strong> Undecided proposals are NOT applied — those variants are reported at their baseline classification.</p>`
+    : "";
+
+  const body = rows
+    .map(({ v, p, d }) => {
+      const live = isLive(p, d);
+      const state = tierOf(v, ctx).state;
+      const who = live && d ? esc(d.curator_name ?? d.curator) : "—";
+      const when = live && d ? esc(d.decided_at) : "—";
+      const note = live && d?.note ? esc(d.note) : d && !live ? "Superseded by a re-run — requires re-review." : "";
+      return `<tr>
+        <td>${esc(v.gene)}<div class="mono muted">${esc(v.hgvs_c)}</div></td>
+        <td>${esc(p.from_tier)} → ${esc(p.to_tier)}</td>
+        <td><strong>${esc(TIER_STATE_LABEL[state])}</strong></td>
+        <td>${esc(tierOf(v, ctx).tier)}</td>
+        <td>${who}</td>
+        <td class="muted">${when}</td>
+        <td>${note}</td>
+      </tr>`;
+    })
+    .join("");
+
+  return `<h3>Reclassification proposals &amp; curator decisions</h3>
+    ${banner}
+    <table class="grid"><thead><tr>
+      <th>Variant</th><th>Proposed</th><th>Decision</th><th>Reported as</th>
+      <th>Curator</th><th>Decided</th><th>Note</th>
+    </tr></thead><tbody>${body}</tbody></table>`;
 }
 
 function firedEvidence(v: ReportVariant): string {
@@ -231,15 +308,27 @@ function clinvarBlock(v: ReportVariant): string {
   return `<p><strong>ClinVar:</strong> ${esc(cv.clinical_significance)}${stars}${conds}</p>`;
 }
 
-function variantPage(v: ReportVariant, emission: ReportEmission): string {
+function variantPage(v: ReportVariant, emission: ReportEmission, ctx: TierCtx): string {
   const gi = v.gene ? emission.gene_info?.[v.gene] : undefined;
   const genePara = gi?.summary
     ? `<p class="prose"><strong>${esc(gi.name ?? v.gene)}.</strong> ${esc(gi.summary)}</p>`
     : "";
-  const reclass =
-    v.reclass_delta && v.reclass_tier
-      ? `<p class="reclass"><strong>Reclassification (South-Asian cohort):</strong> ${esc(v.baseline_tier)} → ${esc(v.reclass_tier)} (Δ ${esc(v.reclass_delta)})</p>`
-      : "";
+  const t = tierOf(v, ctx);
+  const proposal = ctx.proposals.get(v.id);
+  const decision = ctx.decisions.get(v.id);
+  // The proposal block states its own standing explicitly. An un-acted-on
+  // proposal reads as a proposal, never as a classification.
+  const reclass = proposal
+    ? `<p class="reclass">
+        <strong>Reclassification proposed (South-Asian cohort):</strong>
+        ${esc(proposal.from_tier)} → ${esc(proposal.to_tier)}${v.reclass_delta ? ` (Δ ${esc(v.reclass_delta)})` : ""}<br>
+        <strong>Curator decision:</strong> ${esc(TIER_STATE_LABEL[t.state])}${
+          isLive(proposal, decision) && decision
+            ? ` — ${esc(decision.curator_name ?? decision.curator)}, ${esc(decision.decided_at)}${decision.note ? `<br><em>${esc(decision.note)}</em>` : ""}`
+            : ". This proposal has not been applied; the classification below is the baseline."
+        }
+      </p>`
+    : "";
   return `<section class="variant-page">
     <h2>${esc(v.gene ?? "—")} <span class="mono">${esc(v.hgvs_c)} ${esc(v.hgvs_p)}</span></h2>
     <table class="kv">
@@ -249,7 +338,7 @@ function variantPage(v: ReportVariant, emission: ReportEmission): string {
       <tr><th>Consequence</th><td>${esc(v.consequence)}</td></tr>
       <tr><th>Inheritance</th><td>${esc((v.inheritance_models ?? []).join(", "))} ${v.inheritance_confidence ? `(${esc(v.inheritance_confidence)} confidence)` : ""}</td></tr>
       <tr><th>OMIM</th><td>${esc(v.omim_id)}</td></tr>
-      <tr><th>Classification</th><td><strong>${esc(tierOf(v))}</strong></td></tr>
+      <tr><th>Classification</th><td><strong>${esc(t.tier)}</strong></td></tr>
     </table>
     ${genePara}
     ${clinvarBlock(v)}
@@ -274,6 +363,7 @@ const STYLE = `
   .mono { font-family: "SFMono-Regular", Consolas, monospace; font-size: 9.5pt; }
   .prose { margin: 8pt 0; }
   .reclass { background: #f5efe6; border-left: 3px solid #b07d2b; padding: 6pt 10pt; margin: 8pt 0; }
+  .pending-note { border: 1px solid #b07d2b; background: #fbf6ee; padding: 6pt 10pt; margin: 6pt 0; font-size: 9.5pt; }
   table { border-collapse: collapse; width: 100%; margin: 6pt 0; }
   table.kv th { text-align: left; width: 32%; vertical-align: top; padding: 3pt 8pt 3pt 0; color: #444; font-weight: normal; }
   table.kv td { padding: 3pt 0; }
@@ -285,8 +375,43 @@ const STYLE = `
   @page { size: A4; margin: 0; }
 `;
 
-export function buildReportHtml(emission: ReportEmission, selectedIds?: string[]): string {
+/**
+ * Render the archival clinical report.
+ *
+ * `decisions` are the LIVE curator decisions (one per variant, newest wins) —
+ * see GET /api/cases/:id/decisions. Omitting them is not "no proposals", it's
+ * "nothing signed off": every proposal then renders as awaiting review and the
+ * baseline tier is what gets reported.
+ */
+export function buildReportHtml(
+  emission: ReportEmission,
+  selectedIds?: string[],
+  decisions?: DecisionRow[],
+): string {
   const variants = pickVariants(emission, selectedIds);
+
+  const proposals = new Map((emission.proposals ?? []).map((p) => [p.variant_id, p]));
+  // reclassify_all() sets variant.reclass_tier and emits a proposal together,
+  // so these always pair in a well-formed emission. If we're handed one where
+  // they don't (truncated/legacy case.json), synthesize the proposal rather
+  // than dropping the reclassification from the report entirely. A synthesized
+  // proposal can't match any recorded decision's fingerprint, so it correctly
+  // lands as needing review instead of silently reporting as approved.
+  for (const v of variants) {
+    if (v.reclass_tier && !proposals.has(v.id)) {
+      proposals.set(v.id, {
+        variant_id: v.id,
+        from_tier: v.baseline_tier ?? "VUS",
+        to_tier: v.reclass_tier,
+        changed_criteria: [],
+      });
+    }
+  }
+
+  const ctx: TierCtx = {
+    proposals,
+    decisions: new Map((decisions ?? []).map((d) => [d.variant_id, d])),
+  };
   const generated = new Date().toISOString().slice(0, 10);
   const versions = Object.entries(emission.versions ?? {})
     .map(([k, val]) => `${esc(k)} ${esc(val)}`)
@@ -312,17 +437,22 @@ export function buildReportHtml(emission: ReportEmission, selectedIds?: string[]
   ${hpoTable(emission)}
 
   <h3>Selected findings</h3>
-  ${findingsSummary(variants)}
+  ${findingsSummary(variants, ctx)}
+
+  ${reclassLedger(variants, ctx)}
 
   <div class="disclaimer">
-    This report was generated by VariantGPT for clinical review. All variant
-    classifications are provisional and must be confirmed by a qualified clinical
-    molecular geneticist before being used for patient care. Pipeline versions:
+    <strong>RESEARCH USE ONLY — NOT FOR DIAGNOSTIC PURPOSES.</strong>
+    This report was generated by VariantGPT. All variant classifications are
+    provisional and must be confirmed by a qualified clinical molecular
+    geneticist before being used for patient care. Reclassification proposals
+    derived from South-Asian cohort allele frequencies are advisory and are only
+    applied where a curator has recorded a decision above. Pipeline versions:
     ${versions || "—"}.
   </div>
 </div>
 
-${variants.map((v) => `<div class="page">${variantPage(v, emission)}</div>`).join("\n")}
+${variants.map((v) => `<div class="page">${variantPage(v, emission, ctx)}</div>`).join("\n")}
 
 </body></html>`;
 }

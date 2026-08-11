@@ -17,8 +17,13 @@ import { spawn } from "node:child_process";
 import { mkdir, readFile, writeFile, stat, readdir } from "node:fs/promises";
 import { createWriteStream, existsSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { randomUUID } from "node:crypto";
 import type { Plugin, ViteDevServer } from "vite";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import {
+  isLive, latestByVariant, proposalFingerprint, validateDecision,
+  type DecisionInput, type DecisionRecord, type ProposalLike,
+} from "./src/decisionRules";
 
 const REPO_ROOT = resolve(__dirname, "..", "..");
 const UPLOAD_ROOT = resolve(REPO_ROOT, "data", "uploads");
@@ -129,6 +134,14 @@ export function devCaseApi(): Plugin {
           // POST /api/cases/cleanup
           if (url.match(/^\/api\/cases\/cleanup\/?$/) && req.method === "POST") {
             return await handleCleanup(req, res);
+          }
+          // GET|POST /api/cases/:caseId/decisions — curator sign-off (PRD §4.10)
+          const dec = url.match(/^\/api\/cases\/([^/?]+)\/decisions\/?$/);
+          if (dec && req.method === "GET") {
+            return await handleGetDecisions(res, dec[1]);
+          }
+          if (dec && req.method === "POST") {
+            return await handlePostDecision(req, res, dec[1]);
           }
           return notFound(res);
         } catch (e) {
@@ -438,6 +451,104 @@ async function readJson<T>(req: IncomingMessage): Promise<T> {
   const chunks: Buffer[] = [];
   for await (const c of req) chunks.push(c as Buffer);
   return JSON.parse(Buffer.concat(chunks).toString("utf-8")) as T;
+}
+
+// ───────────────── curator sign-off (PRD §4.10) ─────────────────
+//
+// Dev stand-in for the Worker's D1 `reclass_decisions` table: an append-only
+// JSON array next to the case's uploads. Same rules as prod — the validation
+// and fingerprinting come from src/decisions.ts, which the SPA also uses, so
+// there's exactly one implementation of the invariant on this side.
+
+function decisionsPath(caseId: string) {
+  return resolve(UPLOAD_ROOT, caseId, "decisions.json");
+}
+
+/** Stored newest-first, matching the Worker's `ORDER BY decided_at DESC`. */
+async function readDecisions(caseId: string): Promise<DecisionRecord[]> {
+  try {
+    const txt = await readFile(decisionsPath(caseId), "utf-8");
+    const parsed = JSON.parse(txt);
+    return Array.isArray(parsed) ? (parsed as DecisionRecord[]) : [];
+  } catch {
+    return []; // no decisions recorded yet
+  }
+}
+
+/** Proposals from the generated case.json, keyed by variant id. */
+async function readProposals(caseId: string): Promise<Map<string, ProposalLike> | null> {
+  try {
+    const txt = await readFile(resolve(PUBLIC_CASES, caseId, "case.json"), "utf-8");
+    const emission = JSON.parse(txt) as { proposals?: ProposalLike[] };
+    return new Map((emission.proposals ?? []).map((p) => [p.variant_id, p]));
+  } catch {
+    return null;
+  }
+}
+
+async function handleGetDecisions(res: ServerResponse, caseId: string) {
+  const safe = sanitize(caseId);
+  if (!safe) return error(res, 400, "bad caseId");
+
+  const rows = await readDecisions(safe);
+  const proposals = await readProposals(safe);
+  const staleOf = (d: DecisionRecord) => (proposals ? !isLive(proposals.get(d.variant_id), d) : false);
+
+  const live = latestByVariant(rows);
+  const pending = proposals
+    ? [...proposals.keys()].filter((vid) => {
+        const d = live.get(vid);
+        return !d || !isLive(proposals.get(vid), d);
+      })
+    : [];
+
+  return json(res, 200, {
+    decisions: [...live.values()].map((d) => ({ ...d, stale: staleOf(d) })),
+    history: rows.map((d) => ({ ...d, stale: staleOf(d) })),
+    pending,
+    proposal_count: proposals?.size ?? 0,
+  });
+}
+
+async function handlePostDecision(req: IncomingMessage, res: ServerResponse, caseId: string) {
+  const safe = sanitize(caseId);
+  if (!safe) return error(res, 400, "bad caseId");
+
+  const body = await readJson<{ variant_id?: string } & DecisionInput>(req);
+  const variantId = typeof body.variant_id === "string" ? body.variant_id : "";
+  if (!variantId) return error(res, 400, "variant_id is required");
+
+  const proposals = await readProposals(safe);
+  if (!proposals) return error(res, 404, "case.json not found — run the case first");
+  const proposal = proposals.get(variantId);
+  if (!proposal) return error(res, 404, "no reclassification proposal for this variant");
+
+  const v = validateDecision(body, proposal);
+  if (!v.ok) return error(res, 400, v.error);
+
+  const row: DecisionRecord = {
+    id: randomUUID(),
+    case_id: safe,
+    variant_id: variantId,
+    action: v.action,
+    from_tier: proposal.from_tier,
+    proposed_tier: proposal.to_tier,
+    final_tier: v.final_tier,
+    // Dev has no Clerk session; the Worker stamps the real Clerk `sub`.
+    curator: "dev-unauthenticated",
+    curator_name: v.curator_name,
+    note: v.note,
+    proposal_fingerprint: proposalFingerprint(proposal),
+    decided_at: new Date().toISOString().replace("T", " ").slice(0, 19),
+    stale: false,
+  };
+
+  // Append-only: prepend so the file stays newest-first, never rewrite a row.
+  const rows = await readDecisions(safe);
+  await mkdir(dirname(decisionsPath(safe)), { recursive: true });
+  await writeFile(decisionsPath(safe), JSON.stringify([row, ...rows], null, 2), "utf-8");
+
+  return json(res, 201, { decision: row });
 }
 
 function json(res: ServerResponse, status: number, body: unknown) {

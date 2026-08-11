@@ -70,7 +70,7 @@ variantgpt-engine run --help              # CLI (Typer); entrypoint = variantgpt
 
 ## Invariants (do not violate)
 
-- **Reclassification never auto-commits.** `reclassify.py` emits `ReclassProposal` in `pending` status; every tier change requires a recorded human-curator decision (PRD §4.10). Do not add a code path that applies a proposal automatically.
+- **Reclassification never auto-commits.** `reclassify.py` emits `ReclassProposal` in `pending` status; every tier change requires a recorded human-curator decision (PRD §4.10). Do not add a code path that applies a proposal automatically. Enforcement on the edge lives in `app/api/src/decisions.ts` — `resolveTier()` is the one answer to "what tier does this variant carry?", and pending / stale / rejected proposals all resolve to the **baseline** tier. Decisions are stored append-only in D1 `reclass_decisions` and pinned to a `proposal_fingerprint`, so an engine rerun that changes a proposal invalidates the old sign-off instead of inheriting it. `app/web/src/decisionRules.ts` mirrors these rules for the SPA and the Vite dev shim; the two must stay in step. Never render a variant's tier from `reclass_tier` directly.
 - **South-Asian AF sources are exactly `indigenomes`, `genomeasia`, `genomeindia`.** gnomAD-SAS is deliberately excluded (Bangladeshi/diaspora-dominated, under-represents pan-Indian sub-populations). Don't add gnomAD-SAS to `SAS_SOURCES`.
 - **Reclassification runs on LP/P too, not just VUS** — so a frequency-blind inflated call can be pulled *down* when an Indian source shows the allele is common. Preserve this bidirectionality.
 - **ClinVar concordance is advisory** — it flags disagreements for review and must never override the engine's classification.

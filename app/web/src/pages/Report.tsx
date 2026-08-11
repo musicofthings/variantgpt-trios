@@ -4,9 +4,10 @@ import { TierChip } from "../components/TierChip";
 import { ReclassBadge } from "../components/ReclassBadge";
 import { PopulationFreqPanel } from "../components/PopulationFreqPanel";
 import { useDemoCase } from "../caseData";
+import { useDecisions, tierForVariant, type DecisionRecord, type UseDecisions } from "../decisions";
 import { api, apiFetch } from "../apiBase";
 import type { GeneInfoRow, HPOTermRow } from "../caseData";
-import type { EvidenceRow, InheritanceModel, VariantRow } from "../types";
+import type { EvidenceRow, InheritanceModel, Tier, VariantRow } from "../types";
 
 /** Clinical report — print-ready, paginated layout.
  *  - Page 1: cover + case summary + selected-findings table
@@ -22,6 +23,9 @@ export function Report() {
   const { caseId } = useParams<{ caseId: string }>();
   const [search] = useSearchParams();
   const { data, loading, error } = useDemoCase(caseId);
+  // Curator sign-off (PRD §4.10). A proposal without a live decision is NOT
+  // applied — the report prints the baseline tier and says so explicitly.
+  const decisions = useDecisions(caseId);
 
   const selectedIds = useMemo(() => {
     const raw = search.get("variants") ?? "";
@@ -290,7 +294,8 @@ export function Report() {
                       </td>
                       <td>{v.inheritance_models.map(humanizeModel).join(", ") || "—"}</td>
                       <td className="num">{fmt(v.af_indi)}</td>
-                      <td><TierChip tier={v.baseline_tier} /></td>
+                      {/* The REPORTED tier — the proposed one only after sign-off. */}
+                      <td><TierChip tier={tierForVariant(v, !!v.reclass, decisions.byVariant.get(v.id)).tier as Tier} /></td>
                       <td>{v.reclass ? <ReclassBadge {...v.reclass} /> : "—"}</td>
                     </tr>
                   ))}
@@ -300,29 +305,8 @@ export function Report() {
           </Section>
 
           {reclassDecisions.length > 0 ? (
-            <Section title="Reclassification decisions">
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>Variant</th>
-                    <th>Proposal</th>
-                    <th>Decision</th>
-                    <th>Curator</th>
-                    <th>Note</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {reclassDecisions.map((v) => (
-                    <tr key={v.id}>
-                      <td className="mono">{v.gene} {v.hgvs_c}</td>
-                      <td>{v.reclass!.from} → {v.reclass!.to} (Δ {v.reclass!.delta})</td>
-                      <td><em>Pending</em></td>
-                      <td>—</td>
-                      <td>—</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <Section title="Reclassification proposals & curator decisions">
+              <ReclassLedger variants={reclassDecisions} decisions={decisions} />
             </Section>
           ) : null}
 
@@ -366,6 +350,7 @@ export function Report() {
             caseId={caseId!}
             hpoById={hpoById}
             geneInfoMap={geneInfoMap}
+            decision={decisions.byVariant.get(v.id)}
           />
         ))}
 
@@ -390,13 +375,15 @@ export function Report() {
 /** Per-variant detail page — same fields as the workbench's Clinical Card,
  *  plus phenotype relevance + evidence ledger + population AF + predictors.
  *  Wrapped in a .report-page so @media print forces it to a fresh sheet. */
-function VariantDetailPage({ v, index, total, caseId, hpoById, geneInfoMap }: {
+function VariantDetailPage({ v, index, total, caseId, hpoById, geneInfoMap, decision }: {
   v: VariantRow;
   index: number;
   total: number;
   caseId: string;
   hpoById: Map<string, HPOTermRow>;
   geneInfoMap: Record<string, GeneInfoRow>;
+  /** Live curator decision for this variant, if one has been recorded. */
+  decision?: DecisionRecord;
 }) {
   const geneInfo = v.gene ? geneInfoMap[v.gene] : undefined;
   const STRENGTH_TOKEN: Record<string, string> = {
@@ -423,7 +410,8 @@ function VariantDetailPage({ v, index, total, caseId, hpoById, geneInfoMap }: {
           {v.hgvs_p ? <span style={{ color: "var(--ink-soft)", marginLeft: 8 }}>{v.hgvs_p}</span> : null}
         </h2>
         <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6 }}>
-          <TierChip tier={v.baseline_tier} />
+          {/* Reported tier — the proposed one only once a curator signed off. */}
+          <TierChip tier={tierForVariant(v, !!v.reclass, decision).tier as Tier} />
           {v.reclass ? <ReclassBadge {...v.reclass} /> : null}
           <span style={{ color: "var(--ink-soft)", fontSize: 12 }}>{v.consequence}</span>
         </div>
@@ -485,7 +473,7 @@ function VariantDetailPage({ v, index, total, caseId, hpoById, geneInfoMap }: {
             <RRow label="ACMG fired" value={firedTokens ? <span className="mono" style={{ fontSize: 11 }}>{firedTokens}</span> : null} />
             <RRow label="Classification" value={
               <>
-                <TierChip tier={v.baseline_tier} />
+                <TierChip tier={tierForVariant(v, !!v.reclass, decision).tier as Tier} />
                 {v.reclass ? <span style={{ marginLeft: 8 }}><ReclassBadge {...v.reclass} /></span> : null}
               </>
             } />
@@ -523,7 +511,7 @@ function VariantDetailPage({ v, index, total, caseId, hpoById, geneInfoMap }: {
           its plain-English definition per matched term. */}
       <Section title="Variant findings & phenotype relevance">
         <p style={{ fontSize: 12 }}>
-          {variantParagraph(v)}
+          {variantParagraph(v, decision)}
         </p>
         {v.hpo_matches && v.hpo_matches.length > 0 ? (
           <ul style={{ fontSize: 11, margin: "8px 0 0 16px", padding: 0 }}>
@@ -594,21 +582,108 @@ function VariantDetailPage({ v, index, total, caseId, hpoById, geneInfoMap }: {
       ) : null}
 
       {v.reclass ? (
-        <Section title="Reclassification decision">
-          <table className="table" style={{ fontSize: 12 }}>
-            <tbody>
-              <tr><td style={{ width: 140, color: "var(--ink-soft)" }}>Proposal</td>
-                <td>{v.reclass.from} → {v.reclass.to} (Δ {v.reclass.delta})</td></tr>
-              <tr><td style={{ color: "var(--ink-soft)" }}>Driven by</td>
-                <td className="mono" style={{ fontSize: 11 }}>{v.reclass.criteria.join(", ")}</td></tr>
-              <tr><td style={{ color: "var(--ink-soft)" }}>Decision</td><td><em>Pending</em></td></tr>
-              <tr><td style={{ color: "var(--ink-soft)" }}>Curator</td><td>—</td></tr>
-              <tr><td style={{ color: "var(--ink-soft)" }}>Date</td><td>—</td></tr>
-            </tbody>
-          </table>
+        <Section title="Reclassification proposal & curator decision">
+          <VariantDecisionTable v={v} decision={decision} />
         </Section>
       ) : null}
     </section>
+  );
+}
+
+/** Human phrasing for a decision state, in the report's voice. */
+const DECISION_PROSE: Record<string, string> = {
+  pending: "Pending — awaiting curator review",
+  stale: "Requires re-review — the proposal changed after the earlier decision",
+  accepted: "Accepted",
+  modified: "Modified by curator",
+  rejected: "Rejected",
+};
+
+function VariantDecisionTable({ v, decision }: { v: VariantRow; decision?: DecisionRecord }) {
+  const { tier, state } = tierForVariant(v, !!v.reclass, decision);
+  const live = state === "accepted" || state === "modified" || state === "rejected";
+  return (
+    <table className="table" style={{ fontSize: 12 }}>
+      <tbody>
+        <tr><td style={{ width: 140, color: "var(--ink-soft)" }}>Proposal</td>
+          <td>{v.reclass!.from} → {v.reclass!.to} (Δ {v.reclass!.delta})</td></tr>
+        <tr><td style={{ color: "var(--ink-soft)" }}>Driven by</td>
+          <td className="mono" style={{ fontSize: 11 }}>{v.reclass!.criteria.join(", ")}</td></tr>
+        <tr><td style={{ color: "var(--ink-soft)" }}>Decision</td>
+          <td>{live ? DECISION_PROSE[state] : <em>{DECISION_PROSE[state]}</em>}</td></tr>
+        <tr><td style={{ color: "var(--ink-soft)" }}>Reported as</td>
+          <td><strong>{tier}</strong>{live ? null : " (baseline — the proposal is not applied)"}</td></tr>
+        <tr><td style={{ color: "var(--ink-soft)" }}>Curator</td>
+          <td>{live && decision ? (decision.curator_name ?? decision.curator) : "—"}</td></tr>
+        <tr><td style={{ color: "var(--ink-soft)" }}>Date</td>
+          <td className="mono">{live && decision ? decision.decided_at : "—"}</td></tr>
+        <tr><td style={{ color: "var(--ink-soft)" }}>Rationale</td>
+          <td>{live && decision?.note ? decision.note : "—"}</td></tr>
+      </tbody>
+    </table>
+  );
+}
+
+/** Cover-page ledger of every proposal touching a reported variant, and what a
+ *  curator did about it. Undecided proposals are called out loudly — a report
+ *  signed with pending proposals is a report whose classifications are still
+ *  provisional in a way the reader must see. */
+function ReclassLedger({ variants, decisions }: { variants: VariantRow[]; decisions: UseDecisions }) {
+  const rows = variants.map((v) => ({
+    v,
+    d: decisions.byVariant.get(v.id),
+    ...tierForVariant(v, true, decisions.byVariant.get(v.id)),
+  }));
+  const undecided = rows.filter((r) => r.state === "pending" || r.state === "stale").length;
+
+  return (
+    <>
+      {undecided > 0 ? (
+        <p
+          className="pending-note"
+          style={{
+            fontSize: 12, padding: "8px 12px", marginBottom: 8,
+            border: "1px solid #b07d2b", background: "rgba(176,125,43,0.08)", borderRadius: 6,
+          }}
+        >
+          <strong>
+            {undecided} of {rows.length} reclassification proposal{rows.length === 1 ? "" : "s"}{" "}
+            {undecided === 1 ? "is" : "are"} awaiting curator review.
+          </strong>{" "}
+          Undecided proposals are not applied — those variants are reported at their baseline
+          classification.
+        </p>
+      ) : null}
+      <table className="table">
+        <thead>
+          <tr>
+            <th>Variant</th>
+            <th>Proposal</th>
+            <th>Decision</th>
+            <th>Reported as</th>
+            <th>Curator</th>
+            <th>Date</th>
+            <th>Rationale</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(({ v, d, tier, state }) => {
+            const live = state === "accepted" || state === "modified" || state === "rejected";
+            return (
+              <tr key={v.id}>
+                <td className="mono">{v.gene} {v.hgvs_c}</td>
+                <td>{v.reclass!.from} → {v.reclass!.to} (Δ {v.reclass!.delta})</td>
+                <td>{live ? DECISION_PROSE[state] : <em>{DECISION_PROSE[state]}</em>}</td>
+                <td><strong>{tier}</strong></td>
+                <td>{live && d ? (d.curator_name ?? d.curator) : "—"}</td>
+                <td className="mono">{live && d ? d.decided_at : "—"}</td>
+                <td>{live && d?.note ? d.note : "—"}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </>
   );
 }
 
@@ -774,7 +849,7 @@ function geneParagraph(v: VariantRow): React.ReactNode {
  *  zygosity in the proband, inheritance model with confidence, ACMG tier,
  *  reclassification narrative (if any), and a phenotype-relevance closing
  *  sentence referencing the HPO overlap. */
-function variantParagraph(v: VariantRow): React.ReactNode {
+function variantParagraph(v: VariantRow, decision?: DecisionRecord): React.ReactNode {
   const parts: React.ReactNode[] = [];
   const probandCall = v.calls?.find((c) => c.role === "proband");
   const zyg = probandCall ? humanizeZyg(probandCall.zygosity).toLowerCase() : null;
@@ -800,7 +875,23 @@ function variantParagraph(v: VariantRow): React.ReactNode {
   }
 
   if (v.reclass) {
-    parts.push(<>South-Asian allele-frequency review reclassified this variant from <strong>{v.reclass.from}</strong> to <strong>{v.reclass.to}</strong> (Δ {v.reclass.delta}), driven by {v.reclass.criteria.join(", ")}. </>);
+    // A proposal is a proposal. The prose must not narrate it as a completed
+    // reclassification unless a curator actually signed off (PRD §4.10).
+    const { state } = tierForVariant(v, true, decision);
+    parts.push(
+      <>South-Asian allele-frequency review <strong>proposed</strong> reclassifying this variant
+        from <strong>{v.reclass.from}</strong> to <strong>{v.reclass.to}</strong>{" "}
+        (Δ {v.reclass.delta}), driven by {v.reclass.criteria.join(", ")}. </>,
+    );
+    if (state === "accepted") {
+      parts.push(<>This proposal was <strong>accepted</strong> by the reviewing curator{decision?.curator_name ? <> ({decision.curator_name})</> : null}. </>);
+    } else if (state === "modified") {
+      parts.push(<>The reviewing curator <strong>modified</strong> the proposal, classifying this variant as <strong>{decision?.final_tier}</strong>. </>);
+    } else if (state === "rejected") {
+      parts.push(<>The reviewing curator <strong>rejected</strong> this proposal; the variant retains its baseline classification. </>);
+    } else {
+      parts.push(<>This proposal is <strong>pending curator review</strong> and has not been applied — the classification above is the baseline. </>);
+    }
   }
 
   if (v.clinvar?.clinical_significance) {
